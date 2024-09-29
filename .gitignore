@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .history/
 .idea/
+investment_table.csv
 
 # C extensions
 *.so
