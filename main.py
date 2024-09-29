@@ -9,12 +9,12 @@ plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 设置回测的开始和结束日期
-start_date = (datetime.now() - timedelta(days=365*20)).date()
+start_date = (datetime.now() - timedelta(days=365 * 20)).date()
 end_date = datetime.now().date()
-
 
 # 定义我们要回测的股票代码
 tickers = ['QQQ', 'SPY', 'XLG']
+
 
 # 获取每月第三个周五的函数
 def get_third_friday(date):
@@ -23,11 +23,13 @@ def get_third_friday(date):
     third_friday = first_friday + timedelta(days=14)
     return third_friday
 
+
 # 获取最近的交易日
 def get_nearest_business_day(date, data_index):
     while date not in data_index:
         date += timedelta(days=1)
     return date
+
 
 # 下载数据
 data = yf.download(tickers, start=start_date, end=end_date)['Adj Close']
@@ -70,5 +72,5 @@ plt.show()
 for ticker in tickers:
     print(f"\n{ticker} 的摘要统计：")
     print(f"总回报: {cumulative_returns[ticker].iloc[-1]:.2f}")
-    print(f"年化回报: {(cumulative_returns[ticker].iloc[-1]**(1/20) - 1):.4f}")
-    print(f"夏普比率: {returns[ticker].mean() / returns[ticker].std() * (252**0.5):.4f}")  # 假设252个交易日
+    print(f"年化回报: {(cumulative_returns[ticker].iloc[-1] ** (1 / 20) - 1):.4f}")
+    print(f"夏普比率: {returns[ticker].mean() / returns[ticker].std() * (252 ** 0.5):.4f}")  # 假设252个交易日
