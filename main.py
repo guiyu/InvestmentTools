@@ -22,8 +22,18 @@ config = {
     'std_window': 30,
     'min_weight': 0.5,
     'max_weight': 2,
+    'macd_short_window': 12,
+    'macd_long_window': 26,
+    'macd_signal_window': 9,
 }
 
+def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
+    short_ema = data.ewm(span=short_window, adjust=False).mean()
+    long_ema = data.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal = macd.ewm(span=signal_window, adjust=False).mean()
+    histogram = macd - signal
+    return macd, signal, histogram
 
 def get_second_wednesday(date):
     first = date.replace(day=1)
@@ -54,9 +64,14 @@ def get_investment_dates(start_date, end_date, data_index):
     return monthly_dates
 
 
-def calculate_weight(price, sma, std, avg_std):
+def calculate_weight(price, sma, std, avg_std, macd, signal):
     n = 1 + (std / avg_std)
-    weight = (sma / price) ** n
+    tech_weight = (sma / price) ** n
+
+    # MACD权重调整
+    macd_weight = 1 + (macd - signal) / price  # MACD高于信号线时增加权重，反之减少
+
+    weight = tech_weight * macd_weight
     return max(min(weight, config['max_weight']), config['min_weight'])
 
 
@@ -67,13 +82,20 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 确保数据是浮点数类型
     data = data.astype(float)
 
-
     # 计算技术指标
     data = pd.DataFrame(data)
     data.columns = [ticker]
     data[f'{ticker}_SMA'] = data[ticker].rolling(window=config['sma_window']).mean()
     data[f'{ticker}_STD'] = data[ticker].rolling(window=config['std_window']).std()
     data[f'{ticker}_AVG_STD'] = data[f'{ticker}_STD'].expanding().mean()
+
+    # 计算MACD
+    data[f'{ticker}_MACD'], data[f'{ticker}_MACD_SIGNAL'], _ = calculate_macd(
+        data[ticker],
+        short_window=config['macd_short_window'],
+        long_window=config['macd_long_window'],
+        signal_window=config['macd_signal_window']
+    )
 
     # 将索引转换为日期类型
     data.index = pd.to_datetime(data.index).date
@@ -94,8 +116,10 @@ def analyze_and_plot(ticker, start_date, end_date):
         sma = data.loc[d, f'{ticker}_SMA']
         std = data.loc[d, f'{ticker}_STD']
         avg_std = data.loc[d, f'{ticker}_AVG_STD']
+        macd = data.loc[d, f'{ticker}_MACD']
+        macd_signal = data.loc[d, f'{ticker}_MACD_SIGNAL']
 
-        weight = calculate_weight(price, sma, std, avg_std)
+        weight = calculate_weight(price, sma, std, avg_std, macd, macd_signal)
         investment_amount = config['base_investment'] * weight
         shares_bought = investment_amount / price
 
@@ -141,6 +165,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 绘制结果时使用唯一的标签
     ax.plot(weighted_portfolio_values.index, weighted_portfolio_values, label=f'{ticker} 加权定投', color='blue')
     ax.plot(equal_portfolio_value.index, equal_portfolio_value, label=f'{ticker} 等额定投', linestyle='--', color='orange')
+
 
     ax.set_title(f'{ticker}: 加权定投vs等额定投策略的投资组合价值 ({start_date.year}-{end_date.year})')
     ax.set_xlabel('日期')
