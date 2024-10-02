@@ -9,6 +9,8 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.dates import YearLocator, DateFormatter
+import matplotlib.dates as mdates
 
 # 设置中文字体，这里使用微软雅黑作为例子
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
@@ -126,7 +128,6 @@ def analyze_and_plot(ticker, start_date, end_date):
         results.loc[d, ticker] = shares_bought
         investment_amounts.loc[d, ticker] = investment_amount
 
-
     # 确保 investment_dates 中的日期都在 data 中存在
     valid_investment_dates = [date for date in investment_dates if date in data.index]
 
@@ -145,33 +146,56 @@ def analyze_and_plot(ticker, start_date, end_date):
     last_valid_date = data.index[-1]
     equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
 
-
     # 计算累积份额和加权定投策略价值
     cumulative_shares = results.cumsum()
     weighted_portfolio_values = cumulative_shares.multiply(data.loc[data.index[-1], ticker])
     cumulative_investment = investment_amounts.cumsum()
 
-
-    # 计算等额定投指数增长价值
-    # equal_investment = pd.DataFrame(config['base_investment'], index=investment_dates, columns=[ticker])
-    # equal_shares = equal_investment.divide(data.loc[investment_dates, ticker])
-    # equal_cumulative_shares = equal_shares.cumsum()
-    # equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[data.index[-1], ticker])
-
     # 清除旧图形
     plt.clf()
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+    fig.subplots_adjust(hspace=0.1)  # 减小子图之间的间距
 
     # 绘制结果时使用唯一的标签
-    ax.plot(weighted_portfolio_values.index, weighted_portfolio_values, label=f'{ticker} 加权定投', color='blue')
-    ax.plot(equal_portfolio_value.index, equal_portfolio_value, label=f'{ticker} 等额定投', linestyle='--', color='orange')
+    ax1.plot(weighted_portfolio_values.index, weighted_portfolio_values, label=f'{ticker} 加权定投', color='blue')
+    ax1.plot(equal_portfolio_value.index, equal_portfolio_value, label=f'{ticker} 等额定投', linestyle='--', color='orange')
 
+    ax1.set_title(f'{ticker}: 加权定投vs等额定投策略的投资组合价值 ({start_date.year}-{end_date.year})')
+    ax1.set_ylabel('投资组合价值')
+    ax1.legend()
+    ax1.grid(True)
 
-    ax.set_title(f'{ticker}: 加权定投vs等额定投策略的投资组合价值 ({start_date.year}-{end_date.year})')
-    ax.set_xlabel('日期')
-    ax.set_ylabel('投资组合价值')
-    ax.legend()
-    ax.grid(True)
+    # 绘制MACD
+    ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
+    ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
+    ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'], label='Histogram', color='gray', alpha=0.5)
+    ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
+    ax2.set_ylabel('MACD')
+    ax2.legend(loc='upper left')
+    ax2.grid(True)
+
+    # 设置x轴标签
+    ax2.set_xlabel('日期')
+
+    # 设置 x 轴刻度
+    years = mdates.YearLocator(2)  # 每两年
+    months = mdates.MonthLocator()  # 每月
+    years_fmt = mdates.DateFormatter('%Y')
+
+    ax2.xaxis.set_major_locator(years)
+    ax2.xaxis.set_major_formatter(years_fmt)
+    ax2.xaxis.set_minor_locator(months)
+
+    # # 调整x轴刻度，使其更加清晰
+    # ax2.xaxis.set_major_locator(plt.YearLocator(2))  # 每两年显示一个刻度
+    # ax2.xaxis.set_minor_locator(plt.YearLocator())  # 每年显示一个小刻度
+    # ax2.xaxis.set_major_formatter(plt.DateFormatter('%Y'))  # 格式化为年份
+
+    # 格式化 x 轴
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # 自动调整日期范围
+    ax2.set_xlim(data.index[0], data.index[-1])
 
     # 计算并显示摘要统计
     weighted_final_value = weighted_portfolio_values[ticker].iloc[-1]
@@ -204,8 +228,11 @@ def analyze_and_plot(ticker, start_date, end_date):
     summary += f"  总回报率: {equal_total_return:.2f}%\n"
     summary += f"  年化回报率: {equal_annual_return:.2f}%\n"
 
-    ax.text(0.05, 0.05, summary, transform=ax.transAxes, verticalalignment='bottom',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # 调整布局
+    plt.tight_layout()
 
     return fig
 
