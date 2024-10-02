@@ -67,6 +67,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 确保数据是浮点数类型
     data = data.astype(float)
 
+
     # 计算技术指标
     data = pd.DataFrame(data)
     data.columns = [ticker]
@@ -101,6 +102,26 @@ def analyze_and_plot(ticker, start_date, end_date):
         results.loc[d, ticker] = shares_bought
         investment_amounts.loc[d, ticker] = investment_amount
 
+
+    # 确保 investment_dates 中的日期都在 data 中存在
+    valid_investment_dates = [date for date in investment_dates if date in data.index]
+
+    # 计算等额定投策略价值
+    equal_investment = pd.DataFrame(config['base_investment'], index=valid_investment_dates, columns=[ticker])
+
+    # 处理可能的零值
+    price_data = data.loc[valid_investment_dates, ticker]
+    price_data = price_data.replace(0, np.nan)  # 将零值替换为 NaN
+
+    equal_shares = equal_investment.divide(price_data, axis=0)
+    equal_shares = equal_shares.fillna(0)  # 将 NaN 替换为 0，表示该日期不购买股票
+    equal_cumulative_shares = equal_shares.cumsum()
+
+    # 使用 data 的最后一个有效日期来计算最终价值
+    last_valid_date = data.index[-1]
+    equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
+
+
     # 计算累积份额和加权定投策略价值
     cumulative_shares = results.cumsum()
     weighted_portfolio_values = cumulative_shares.multiply(data.loc[data.index[-1], ticker])
@@ -108,10 +129,10 @@ def analyze_and_plot(ticker, start_date, end_date):
 
 
     # 计算等额定投指数增长价值
-    equal_investment = pd.DataFrame(config['base_investment'], index=investment_dates, columns=[ticker])
-    equal_shares = equal_investment.divide(data.loc[investment_dates, ticker])
-    equal_cumulative_shares = equal_shares.cumsum()
-    equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[data.index[-1], ticker])
+    # equal_investment = pd.DataFrame(config['base_investment'], index=investment_dates, columns=[ticker])
+    # equal_shares = equal_investment.divide(data.loc[investment_dates, ticker])
+    # equal_cumulative_shares = equal_shares.cumsum()
+    # equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[data.index[-1], ticker])
 
     # 清除旧图形
     plt.clf()
