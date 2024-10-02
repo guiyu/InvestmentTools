@@ -1,3 +1,5 @@
+import logging
+
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -104,16 +106,21 @@ def analyze_and_plot(ticker, start_date, end_date):
     weighted_portfolio_values = cumulative_shares.multiply(data.loc[data.index[-1], ticker])
     cumulative_investment = investment_amounts.cumsum()
 
+
     # 计算等额定投指数增长价值
     equal_investment = pd.DataFrame(config['base_investment'], index=investment_dates, columns=[ticker])
     equal_shares = equal_investment.divide(data.loc[investment_dates, ticker])
     equal_cumulative_shares = equal_shares.cumsum()
     equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[data.index[-1], ticker])
 
-    # 绘制结果
+    # 清除旧图形
+    plt.clf()
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(weighted_portfolio_values.index, weighted_portfolio_values, label=f'{ticker} 加权定投')
-    ax.plot(equal_portfolio_value.index, equal_portfolio_value, label=f'{ticker} 等额定投', linestyle='--')
+
+    # 绘制结果时使用唯一的标签
+    ax.plot(weighted_portfolio_values.index, weighted_portfolio_values, label=f'{ticker} 加权定投', color='blue')
+    ax.plot(equal_portfolio_value.index, equal_portfolio_value, label=f'{ticker} 等额定投', linestyle='--', color='orange')
+
     ax.set_title(f'{ticker}: 加权定投vs等额定投策略的投资组合价值 ({start_date.year}-{end_date.year})')
     ax.set_xlabel('日期')
     ax.set_ylabel('投资组合价值')
@@ -217,7 +224,15 @@ def update_plot():
 
     try:
         fig = analyze_and_plot(ticker, start_date, end_date)
-        canvas.figure = fig
+
+        # 清除旧的图形内容
+        for widget in right_frame.winfo_children():
+            widget.destroy()
+
+        # 创建新的画布并显示更新后的图形
+        canvas = FigureCanvasTkAgg(fig, master=right_frame)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
         canvas.draw()
     except Exception as e:
         messagebox.showerror("错误", f"分析过程中出现错误: {str(e)}")
