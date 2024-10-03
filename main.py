@@ -18,10 +18,10 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
-# 修改配置以使用可变的日期
+# 修改配置
 config = {
     'tickers': ['SPY', 'QQQ', 'XLG', 'IWM', 'DIA', 'VTI'],
-    'base_investment': 100,
+    'base_investment': 2000,  # 修改基础投资金额为2000美元
     'sma_window': 200,
     'std_window': 30,
     'min_weight': 0.5,
@@ -30,6 +30,12 @@ config = {
     'macd_long_window': 26,
     'macd_signal_window': 9,
 }
+
+# 修改投资计算函数
+def calculate_investment(price, weight, base_investment):
+    max_shares = base_investment * weight // price
+    return max_shares * price, max_shares
+
 
 def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
     short_ema = data.ewm(span=short_window, adjust=False).mean()
@@ -99,12 +105,12 @@ def save_to_excel(data, equal_investment, weighted_investment, shares_bought, ti
     excel_data['收盘价'] = data.loc[investment_dates, ticker].round(2)
     excel_data['等权投资金额'] = equal_investment[ticker].round(2)
     excel_data['加权投资金额'] = weighted_investment[ticker].round(2)
-    excel_data['等权买入股数'] = (equal_investment[ticker] / excel_data['收盘价']).round(2)
-    excel_data['加权买入股数'] = shares_bought[ticker].round(2)
+    excel_data['等权买入股数'] = (equal_investment[ticker] / excel_data['收盘价']).round(0).astype(int)
+    excel_data['加权买入股数'] = shares_bought[ticker].round(0).astype(int)
 
     # 计算累计持股数和累计投资金额
-    excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum().round(2)
-    excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum().round(2)
+    excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum()
+    excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum()
     excel_data['等权累计投资'] = excel_data['等权投资金额'].cumsum().round(2)
     excel_data['加权累计投资'] = excel_data['加权投资金额'].cumsum().round(2)
 
@@ -119,6 +125,7 @@ def save_to_excel(data, equal_investment, weighted_investment, shares_bought, ti
     # 计算累计收益
     excel_data['等权累计收益'] = (excel_data['等权累计市值'] - excel_data['等权累计投资']).round(2)
     excel_data['加权累计收益'] = (excel_data['加权累计市值'] - excel_data['加权累计投资']).round(2)
+
 
     # 创建 output 目录（如果不存在）
     output_dir = 'output'
@@ -172,8 +179,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     for d in investment_dates:
         price = data.loc[d, ticker]
         weight = calculate_weight(price, last_buy_price)
-        investment_amount = config['base_investment'] * weight
-        shares_bought = investment_amount / price
+        investment_amount, shares_bought = calculate_investment(price, weight, config['base_investment'])
 
         results.loc[d, ticker] = shares_bought
         investment_amounts.loc[d, ticker] = investment_amount
@@ -184,12 +190,13 @@ def analyze_and_plot(ticker, start_date, end_date):
     valid_investment_dates = [date for date in investment_dates if date in data.index]
 
 
-    # 计算等额定投策略价值
-    equal_investment = pd.DataFrame(config['base_investment'], index=investment_dates, columns=[ticker])
-    equal_shares = equal_investment.divide(data.loc[investment_dates, ticker])
-    # equal_shares = equal_shares.fillna(0)  # 将 NaN 替换为 0，表示该日期不购买股票
-    # equal_cumulative_shares = equal_shares.cumsum()
-    # equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[data.index[-1], ticker])
+    # 计算等额定投策略
+    equal_investment = pd.DataFrame(index=investment_dates, columns=[ticker])
+    equal_shares = pd.DataFrame(index=investment_dates, columns=[ticker])
+    for d in investment_dates:
+        price = data.loc[d, ticker]
+        equal_shares.loc[d, ticker] = config['base_investment'] // price
+        equal_investment.loc[d, ticker] = equal_shares.loc[d, ticker] * price
 
 
     # 处理可能的零值
@@ -204,16 +211,17 @@ def analyze_and_plot(ticker, start_date, end_date):
     last_valid_date = data.index[-1]
     equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
 
-    # 计算累积份额和加权定投策略价值
-    cumulative_shares = results.cumsum()
-    weighted_portfolio_values = cumulative_shares.multiply(data.loc[data.index[-1], ticker])
-    cumulative_investment = investment_amounts.cumsum()
+    # 计算累积份额和策略价值
+    equal_cumulative_shares = equal_shares.cumsum()
+    weighted_cumulative_shares = results.cumsum()
 
-    # 计算等权累计收益
+    last_valid_date = data.index[-1]
+    equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
+    weighted_portfolio_values = weighted_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
+
+    # 计算累计收益
     equal_cumulative_returns = equal_portfolio_value.subtract(equal_investment.cumsum(), axis=0)
-
-    # 计算加权累计收益
-    weighted_cumulative_returns = weighted_portfolio_values.subtract(cumulative_investment, axis=0)
+    weighted_cumulative_returns = weighted_portfolio_values.subtract(investment_amounts.cumsum(), axis=0)
 
     # 清除旧图形
     plt.clf()
@@ -267,11 +275,11 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 自动调整日期范围
     ax2.set_xlim(data.index[0], data.index[-1])
 
-    # 计算并显示摘要统计
+    # 更新摘要统计
+    total_weighted_investment = investment_amounts[ticker].sum()
+    total_equal_investment = equal_investment[ticker].sum()
     weighted_final_value = weighted_portfolio_values[ticker].iloc[-1]
     equal_final_value = equal_portfolio_value[ticker].iloc[-1]
-    total_weighted_investment = cumulative_investment[ticker].iloc[-1]
-    total_equal_investment = config['base_investment'] * len(investment_dates)
 
     weighted_total_return = (weighted_final_value / total_weighted_investment - 1) * 100
     equal_total_return = (equal_final_value / total_equal_investment - 1) * 100
@@ -326,7 +334,7 @@ start_date_label = ttk.Label(left_frame, text="起始日期 (YYYY-MM):")
 start_date_label.pack(anchor=tk.W, pady=(0, 5))
 start_date_entry = ttk.Entry(left_frame, width=10)
 start_date_entry.pack(anchor=tk.W, pady=(0, 10))
-start_date_entry.insert(0, "2014-01")  # 默认起始日期
+start_date_entry.insert(0, "2022-01")  # 默认起始日期
 
 end_date_label = ttk.Label(left_frame, text="结束日期 (YYYY-MM):")
 end_date_label.pack(anchor=tk.W, pady=(0, 5))
