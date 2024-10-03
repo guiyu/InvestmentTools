@@ -1,5 +1,5 @@
 import logging
-
+import os
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -20,7 +20,7 @@ plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 修改配置以使用可变的日期
 config = {
-    'tickers': ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI'],
+    'tickers': ['SPY', 'QQQ', 'XLG', 'IWM', 'DIA', 'VTI'],
     'base_investment': 100,
     'sma_window': 200,
     'std_window': 30,
@@ -96,55 +96,39 @@ def save_to_excel(data, equal_investment, weighted_investment, shares_bought, ti
     excel_data = pd.DataFrame(index=investment_dates)
 
     excel_data['日期'] = investment_dates
-    excel_data['收盘价'] = data.loc[investment_dates, ticker]
-    excel_data['等权投资金额'] = equal_investment[ticker]
-    excel_data['加权投资金额'] = weighted_investment[ticker]
-    excel_data['等权买入股数'] = equal_investment[ticker] / excel_data['收盘价']
-    excel_data['加权买入股数'] = shares_bought[ticker]
+    excel_data['收盘价'] = data.loc[investment_dates, ticker].round(2)
+    excel_data['等权投资金额'] = equal_investment[ticker].round(2)
+    excel_data['加权投资金额'] = weighted_investment[ticker].round(2)
+    excel_data['等权买入股数'] = (equal_investment[ticker] / excel_data['收盘价']).round(2)
+    excel_data['加权买入股数'] = shares_bought[ticker].round(2)
 
     # 计算累计持股数和累计投资金额
-    excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum()
-    excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum()
-    excel_data['等权累计投资'] = excel_data['等权投资金额'].cumsum()
-    excel_data['加权累计投资'] = excel_data['加权投资金额'].cumsum()
+    excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum().round(2)
+    excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum().round(2)
+    excel_data['等权累计投资'] = excel_data['等权投资金额'].cumsum().round(2)
+    excel_data['加权累计投资'] = excel_data['加权投资金额'].cumsum().round(2)
 
     # 计算累计市值
-    excel_data['等权累计市值'] = excel_data['等权累计持股数'] * excel_data['收盘价']
-    excel_data['加权累计市值'] = excel_data['加权累计持股数'] * excel_data['收盘价']
+    excel_data['等权累计市值'] = (excel_data['等权累计持股数'] * excel_data['收盘价']).round(2)
+    excel_data['加权累计市值'] = (excel_data['加权累计持股数'] * excel_data['收盘价']).round(2)
 
     # 计算平均成本
-    excel_data['等权平均成本'] = excel_data['等权累计投资'] / excel_data['等权累计持股数']
-    excel_data['加权平均成本'] = excel_data['加权累计投资'] / excel_data['加权累计持股数']
+    excel_data['等权平均成本'] = (excel_data['等权累计投资'] / excel_data['等权累计持股数']).round(2)
+    excel_data['加权平均成本'] = (excel_data['加权累计投资'] / excel_data['加权累计持股数']).round(2)
 
     # 计算累计收益
-    excel_data['等权累计收益'] = excel_data['等权累计市值'] - excel_data['等权累计投资']
-    excel_data['加权累计收益'] = excel_data['加权累计市值'] - excel_data['加权累计投资']
+    excel_data['等权累计收益'] = (excel_data['等权累计市值'] - excel_data['等权累计投资']).round(2)
+    excel_data['加权累计收益'] = (excel_data['加权累计市值'] - excel_data['加权累计投资']).round(2)
 
-    # 创建Excel文件
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f"{ticker}投资数据"
+    # 创建 output 目录（如果不存在）
+    output_dir = 'output'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    # 将DataFrame数据写入Excel
-    for r in dataframe_to_rows(excel_data, index=False, header=True):
-        ws.append(r)
-
-    # 设置列宽
-    for column in ws.columns:
-        max_length = 0
-        column = [cell for cell in column]
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(cell.value)
-            except:
-                pass
-        adjusted_width = (max_length + 2)
-        ws.column_dimensions[column[0].column_letter].width = adjusted_width
-
-    # 保存Excel文件
-    filename = f"{ticker}_投资数据_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
-    wb.save(filename)
+    # 修改文件保存路径
+    filename = os.path.join(output_dir,
+                            f"{ticker}_投资数据_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx")
+    excel_data.to_excel(filename, index=False)
     print(f"数据已保存到文件: {filename}")
 
 
@@ -326,7 +310,7 @@ start_date_label = ttk.Label(left_frame, text="起始日期 (YYYY-MM):")
 start_date_label.pack(anchor=tk.W, pady=(0, 5))
 start_date_entry = ttk.Entry(left_frame, width=10)
 start_date_entry.pack(anchor=tk.W, pady=(0, 10))
-start_date_entry.insert(0, "2000-01")  # 默认起始日期
+start_date_entry.insert(0, "2014-01")  # 默认起始日期
 
 end_date_label = ttk.Label(left_frame, text="结束日期 (YYYY-MM):")
 end_date_label.pack(anchor=tk.W, pady=(0, 5))
