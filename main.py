@@ -9,8 +9,10 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.dates import YearLocator, DateFormatter
 import matplotlib.dates as mdates
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 # 设置中文字体，这里使用微软雅黑作为例子
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
@@ -66,15 +68,84 @@ def get_investment_dates(start_date, end_date, data_index):
     return monthly_dates
 
 
-def calculate_weight(price, sma, std, avg_std, macd, signal):
-    n = 1 + (std / avg_std)
-    tech_weight = (sma / price) ** n
+def calculate_weight(current_price, last_buy_price):
+    if last_buy_price is None:
+        return 1  # 第一次投资
 
-    # MACD权重调整
-    macd_weight = 1 + (macd - signal) / price  # MACD高于信号线时增加权重，反之减少
+    price_change = (current_price - last_buy_price) / last_buy_price
 
-    weight = tech_weight * macd_weight
-    return max(min(weight, config['max_weight']), config['min_weight'])
+    if price_change < -0.2:
+        return 2
+    elif -0.2 <= price_change < -0.1:
+        return 2
+    elif -0.1 <= price_change < -0.05:
+        return 1.5
+    elif -0.05 <= price_change < 0.05:
+        return 1
+    elif 0.05 <= price_change < 0.1:
+        return 0.7
+    elif 0.1 <= price_change < 0.2:
+        return 0.5
+    else:
+        return 0.5
+
+
+# 修改 save_to_excel 函数
+def save_to_excel(data, equal_investment, weighted_investment, shares_bought, ticker, start_date, end_date):
+    investment_dates = equal_investment.index
+    excel_data = pd.DataFrame(index=investment_dates)
+
+    excel_data['日期'] = investment_dates
+    excel_data['收盘价'] = data.loc[investment_dates, ticker]
+    excel_data['等权投资金额'] = equal_investment[ticker]
+    excel_data['加权投资金额'] = weighted_investment[ticker]
+    excel_data['等权买入股数'] = equal_investment[ticker] / excel_data['收盘价']
+    excel_data['加权买入股数'] = shares_bought[ticker]
+
+    # 计算累计持股数和累计投资金额
+    excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum()
+    excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum()
+    excel_data['等权累计投资'] = excel_data['等权投资金额'].cumsum()
+    excel_data['加权累计投资'] = excel_data['加权投资金额'].cumsum()
+
+    # 计算累计市值
+    excel_data['等权累计市值'] = excel_data['等权累计持股数'] * excel_data['收盘价']
+    excel_data['加权累计市值'] = excel_data['加权累计持股数'] * excel_data['收盘价']
+
+    # 计算平均成本
+    excel_data['等权平均成本'] = excel_data['等权累计投资'] / excel_data['等权累计持股数']
+    excel_data['加权平均成本'] = excel_data['加权累计投资'] / excel_data['加权累计持股数']
+
+    # 计算累计收益
+    excel_data['等权累计收益'] = excel_data['等权累计市值'] - excel_data['等权累计投资']
+    excel_data['加权累计收益'] = excel_data['加权累计市值'] - excel_data['加权累计投资']
+
+    # 创建Excel文件
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{ticker}投资数据"
+
+    # 将DataFrame数据写入Excel
+    for r in dataframe_to_rows(excel_data, index=False, header=True):
+        ws.append(r)
+
+    # 设置列宽
+    for column in ws.columns:
+        max_length = 0
+        column = [cell for cell in column]
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(cell.value)
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws.column_dimensions[column[0].column_letter].width = adjusted_width
+
+    # 保存Excel文件
+    filename = f"{ticker}_投资数据_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
+    wb.save(filename)
+    print(f"数据已保存到文件: {filename}")
 
 
 def analyze_and_plot(ticker, start_date, end_date):
@@ -111,28 +182,30 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 初始化结果DataFrame
     results = pd.DataFrame(index=investment_dates, columns=[ticker])
     investment_amounts = pd.DataFrame(index=investment_dates, columns=[ticker])
+    last_buy_price = None
 
     # 模拟投资
     for d in investment_dates:
         price = data.loc[d, ticker]
-        sma = data.loc[d, f'{ticker}_SMA']
-        std = data.loc[d, f'{ticker}_STD']
-        avg_std = data.loc[d, f'{ticker}_AVG_STD']
-        macd = data.loc[d, f'{ticker}_MACD']
-        macd_signal = data.loc[d, f'{ticker}_MACD_SIGNAL']
-
-        weight = calculate_weight(price, sma, std, avg_std, macd, macd_signal)
+        weight = calculate_weight(price, last_buy_price)
         investment_amount = config['base_investment'] * weight
         shares_bought = investment_amount / price
 
         results.loc[d, ticker] = shares_bought
         investment_amounts.loc[d, ticker] = investment_amount
 
+        last_buy_price = price
+
     # 确保 investment_dates 中的日期都在 data 中存在
     valid_investment_dates = [date for date in investment_dates if date in data.index]
 
     # 计算等额定投策略价值
-    equal_investment = pd.DataFrame(config['base_investment'], index=valid_investment_dates, columns=[ticker])
+    equal_investment = pd.DataFrame(config['base_investment'], index=investment_dates, columns=[ticker])
+    equal_shares = equal_investment.divide(data.loc[investment_dates, ticker])
+    # equal_shares = equal_shares.fillna(0)  # 将 NaN 替换为 0，表示该日期不购买股票
+    # equal_cumulative_shares = equal_shares.cumsum()
+    # equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[data.index[-1], ticker])
+
 
     # 处理可能的零值
     price_data = data.loc[valid_investment_dates, ticker]
@@ -233,6 +306,8 @@ def analyze_and_plot(ticker, start_date, end_date):
 
     # 调整布局
     plt.tight_layout()
+
+    save_to_excel(data, equal_investment, investment_amounts, results, ticker, start_date, end_date)
 
     return fig
 
