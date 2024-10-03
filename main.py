@@ -1,7 +1,5 @@
-import logging
 import os
 import yfinance as yf
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, date
@@ -11,8 +9,6 @@ from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
 
 # 设置中文字体，这里使用微软雅黑作为例子
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
@@ -20,7 +16,7 @@ plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 修改配置
 config = {
-    'tickers': ['SPY', 'QQQ', 'XLG', 'IWM', 'DIA', 'VTI'],
+    'tickers': ['SPY', 'QQQ', 'XLG', 'IWM', 'DIA', 'VTI', 'KWEB'],
     'base_investment': 2000,  # 修改基础投资金额为2000美元
     'sma_window': 200,
     'std_window': 30,
@@ -202,14 +198,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 处理可能的零值
     price_data = data.loc[valid_investment_dates, ticker]
     price_data = price_data.replace(0, np.nan)  # 将零值替换为 NaN
-
     equal_shares = equal_investment.divide(price_data, axis=0)
-    # equal_shares = equal_shares.fillna(0)  # 将 NaN 替换为 0，表示该日期不购买股票
-    equal_cumulative_shares = equal_shares.cumsum()
-
-    # 使用 data 的最后一个有效日期来计算最终价值
-    last_valid_date = data.index[-1]
-    equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
 
     # 计算累积份额和策略价值
     equal_cumulative_shares = equal_shares.cumsum()
