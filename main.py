@@ -204,7 +204,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     price_data = price_data.replace(0, np.nan)  # 将零值替换为 NaN
 
     equal_shares = equal_investment.divide(price_data, axis=0)
-    equal_shares = equal_shares.fillna(0)  # 将 NaN 替换为 0，表示该日期不购买股票
+    # equal_shares = equal_shares.fillna(0)  # 将 NaN 替换为 0，表示该日期不购买股票
     equal_cumulative_shares = equal_shares.cumsum()
 
     # 使用 data 的最后一个有效日期来计算最终价值
