@@ -5,6 +5,8 @@
 
 ![SPY累计收益](example1.png)
 
+![定投数据分析](example2.png)
+
 ## 主要功能
 
 - 支持多种ETF和指数的分析，包括SPY, QQQ, XLG, IWM, DIA, VTI等，可自定义配置
