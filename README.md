@@ -2,7 +2,7 @@
 ## 项目概述
 
 这是一个用Python开发的投资策略分析工具，旨在帮助投资者比较不同的定投策略效果。该工具支持分析美国市场的多种ETF和指数，提供图形化界面，便于用户交互和结果可视化。
-![](D:\workspace\stockbacktest\images\example1.png)
+![](images\example1.png)
 
 ## 主要功能
 
