@@ -253,11 +253,6 @@ def analyze_and_plot(ticker, start_date, end_date):
     ax2.xaxis.set_major_formatter(years_fmt)
     ax2.xaxis.set_minor_locator(months)
 
-    # # 调整x轴刻度，使其更加清晰
-    # ax2.xaxis.set_major_locator(plt.YearLocator(2))  # 每两年显示一个刻度
-    # ax2.xaxis.set_minor_locator(plt.YearLocator())  # 每年显示一个小刻度
-    # ax2.xaxis.set_major_formatter(plt.DateFormatter('%Y'))  # 格式化为年份
-
     # 格式化 x 轴
     plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
