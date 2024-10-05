@@ -41,7 +41,7 @@ plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 修改配置
 config = {
-    'tickers': ['SPY', 'QQQ', 'XLG', 'VIG', 'USMV', 'SPLV', 'DVY', 'VDC', 'KWEB'],
+    'tickers': ['SPY', 'QQQ', 'XLG', 'VIG', 'USMV', 'SPLV', 'DVY', 'VDC', 'VGT', 'KWEB'],
     'base_investment': 2000,  # 修改基础投资金额为2000美元
     'sma_window': 200,
     'std_window': 30,
@@ -68,32 +68,41 @@ def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
 
 
 def get_second_wednesday(date):
-    first = date.replace(day=1)
-    first_wednesday = first + timedelta(days=(2 - first.weekday() + 7) % 7)
+    # 获取给定月份的第一天
+    first_day = date.replace(day=1)
+    # 找到第一个周三
+    first_wednesday = first_day + timedelta(days=(2 - first_day.weekday() + 7) % 7)
+    # 第二个周三
     second_wednesday = first_wednesday + timedelta(days=7)
     return second_wednesday
 
 
 def get_nearest_business_day(date, data_index):
-    max_date = data_index[-1]
     while date not in data_index:
         date += timedelta(days=1)
-        if date > max_date:
-            return max_date
+        if date > data_index[-1]:
+            return data_index[-1]  # 如果超出数据范围，返回最后一个可用日期
     return date
 
 
 def get_investment_dates(start_date, end_date, data_index):
-    # 确保只使用数据中存在的日期
-    valid_dates = [d for d in data_index if start_date <= d <= end_date]
-    # 按月选择日期
-    monthly_dates = []
-    current_month = None
-    for d in valid_dates:
-        if d.replace(day=1) != current_month:
-            monthly_dates.append(d)
-            current_month = d.replace(day=1)
-    return monthly_dates
+    investment_dates = []
+    current_date = start_date.replace(day=1)  # 从起始日期的当月开始
+
+    while current_date <= end_date:
+        # 获取当月第二周的周三
+        investment_date = get_second_wednesday(current_date)
+
+        # 如果投资日期在数据范围内，则添加到列表
+        if start_date <= investment_date <= end_date:
+            # 获取最近的交易日（如果当天不是交易日，则向后顺延）
+            actual_investment_date = get_nearest_business_day(investment_date, data_index)
+            investment_dates.append(actual_investment_date)
+
+        # 移动到下一个月
+        current_date = (current_date.replace(day=1) + timedelta(days=32)).replace(day=1)
+
+    return investment_dates
 
 
 def calculate_weight(current_price, last_buy_price):
