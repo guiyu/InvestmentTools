@@ -27,7 +27,6 @@ config = {
     'macd_signal_window': 9,
 }
 
-
 # 修改投资计算函数
 def calculate_investment(price, weight, base_investment):
     max_shares = base_investment * weight // price
@@ -124,6 +123,9 @@ def save_to_excel(data, equal_investment, weighted_investment, shares_bought, ti
     excel_data['等权累计收益'] = (excel_data['等权累计市值'] - excel_data['等权累计投资']).round(2)
     excel_data['加权累计收益'] = (excel_data['加权累计市值'] - excel_data['加权累计投资']).round(2)
 
+    # 添加基础投资金额到 Excel 文件
+    excel_data['基础投资金额'] = config['base_investment']
+
     # 创建 output 目录（如果不存在）
     output_dir = 'output'
     if not os.path.exists(output_dir):
@@ -185,11 +187,14 @@ def analyze_and_plot(ticker, start_date, end_date):
     investment_amounts = pd.DataFrame(index=investment_dates, columns=[ticker])
     last_buy_price = None
 
+    # 使用更新后的 base_investment 值
+    base_investment = config['base_investment']
+
     # 模拟投资
     for d in investment_dates:
         price = data.loc[d, ticker]
         weight = calculate_weight(price, last_buy_price)
-        investment_amount, shares_bought = calculate_investment(price, weight, config['base_investment'])
+        investment_amount, shares_bought = calculate_investment(price, weight, base_investment)
 
         results.loc[d, ticker] = shares_bought
         investment_amounts.loc[d, ticker] = investment_amount
@@ -204,7 +209,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     equal_shares = pd.DataFrame(index=investment_dates, columns=[ticker])
     for d in investment_dates:
         price = data.loc[d, ticker]
-        equal_shares.loc[d, ticker] = config['base_investment'] // price
+        equal_shares.loc[d, ticker] = base_investment // price
         equal_investment.loc[d, ticker] = equal_shares.loc[d, ticker] * price
 
     # 处理可能的零值
@@ -223,6 +228,7 @@ def analyze_and_plot(ticker, start_date, end_date):
     # 计算累计收益
     equal_cumulative_returns = equal_portfolio_value.subtract(equal_investment.cumsum(), axis=0)
     weighted_cumulative_returns = weighted_portfolio_values.subtract(investment_amounts.cumsum(), axis=0)
+
 
     # 使用更新后的 save_to_excel 函数
     equal_returns, weighted_returns = save_to_excel(data, equal_investment, investment_amounts, results, ticker,
@@ -380,6 +386,13 @@ ticker_dropdown.pack(anchor=tk.W, pady=(0, 10))
 right_frame = ttk.Frame(root, padding="10")
 right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
+# 在创建下拉菜单之后，添加以下代码
+base_investment_label = ttk.Label(left_frame, text="基础投资金额 ($):")
+base_investment_label.pack(anchor=tk.W, pady=(10, 5))
+base_investment_entry = ttk.Entry(left_frame, width=10)
+base_investment_entry.pack(anchor=tk.W, pady=(0, 10))
+base_investment_entry.insert(0, str(config['base_investment']))  # 设置默认值
+
 # 创建画布
 canvas = FigureCanvasTkAgg(plt.Figure(figsize=(10, 6)), master=right_frame)
 canvas_widget = canvas.get_tk_widget()
@@ -393,8 +406,14 @@ def update_plot():
         end_date = datetime.strptime(end_date_entry.get(), "%Y-%m").date()
         # 将结束日期调整到月末
         end_date = (date(end_date.year, end_date.month, 1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-    except ValueError:
-        messagebox.showerror("错误", "请输入有效的日期格式 (YYYY-MM)")
+
+        # 更新基础投资金额
+        new_base_investment = float(base_investment_entry.get())
+        if new_base_investment <= 0:
+            raise ValueError("基础投资金额必须大于0")
+        config['base_investment'] = new_base_investment
+    except ValueError as e:
+        messagebox.showerror("错误", f"请输入有效的日期格式 (YYYY-MM) 和基础投资金额: {str(e)}")
         return
 
     if ticker not in config['tickers']:
