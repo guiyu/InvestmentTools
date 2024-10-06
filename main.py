@@ -115,13 +115,21 @@ class InvestmentApp:
         self.reminder_button = ttk.Button(self.left_frame, text="启动提醒", command=self.toggle_reminder)
         self.reminder_button.pack(pady=10)
 
-
         # 创建右侧框架
         self.right_frame = ttk.Frame(self.master, padding="10")
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
+        # 初始化图表
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True,
+                                                      gridspec_kw={'height_ratios': [2, 1]})
+        self.fig.subplots_adjust(hspace=0.1)
+
+        # 设置初始坐标轴
+        self.ax1.set_ylabel('累计收益 ($)')
+        self.ax2.set_ylabel('MACD')
+        self.ax2.set_xlabel('日期')
+
         # 创建画布
-        self.fig = plt.Figure(figsize=(10, 6))
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_frame)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
