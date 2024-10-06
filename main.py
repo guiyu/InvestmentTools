@@ -1,14 +1,15 @@
 import os
-import yfinance as yf
-import numpy as np
-import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, date
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
+import yfinance as yf
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
 # 设置中文字体，这里使用微软雅黑作为例子
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
@@ -41,444 +42,145 @@ plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 修改配置
 config = {
-    'tickers': ['SPY', 'QQQ', 'XLG', 'VIG', 'USMV', 'SPLV', 'DVY', 'VDC', 'VGT', 'KWEB'],
-    'base_investment': 2000,  # 修改基础投资金额为2000美元
-    'sma_window': 200,
-    'std_window': 30,
-    'min_weight': 0.5,
-    'max_weight': 2,
-    'macd_short_window': 12,
-    'macd_long_window': 26,
-    'macd_signal_window': 9,
+    'ticker': 'SPY',
+    'vix_ticker': '^VIX',
+    'start_date': '2000-01-01',
+    'end_date': datetime.now().strftime('%Y-%m-%d'),
+    'base_investment': 2000,
+    'grid_levels': 10,
+    'grid_range': 0.2,  # 20% range for grid
+    'rsi_window': 14,
+    'rsi_overbought': 70,
+    'rsi_oversold': 30,
+    'macd_fast': 12,
+    'macd_slow': 26,
+    'macd_signal': 9,
+    'vix_threshold': 30,
+    'max_drawdown_threshold': 0.05,  # 5% maximum drawdown
 }
 
-# 修改投资计算函数
-def calculate_investment(price, weight, base_investment):
-    max_shares = base_investment * weight // price
-    return max_shares * price, max_shares
+
+def download_data(ticker, start_date, end_date):
+    data = yf.download(ticker, start=start_date, end=end_date)
+    return data['Adj Close']
 
 
-def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
-    short_ema = data.ewm(span=short_window, adjust=False).mean()
-    long_ema = data.ewm(span=long_window, adjust=False).mean()
-    macd = short_ema - long_ema
-    signal = macd.ewm(span=signal_window, adjust=False).mean()
-    histogram = macd - signal
-    return macd, signal, histogram
+def calculate_indicators(data):
+    # Calculate RSI
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=config['rsi_window']).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=config['rsi_window']).mean()
+    rs = gain / loss
+    data['RSI'] = 100 - (100 / (1 + rs))
+
+    # Calculate MACD
+    exp1 = data.ewm(span=config['macd_fast'], adjust=False).mean()
+    exp2 = data.ewm(span=config['macd_slow'], adjust=False).mean()
+    data['MACD'] = exp1 - exp2
+    data['Signal_Line'] = data['MACD'].ewm(span=config['macd_signal'], adjust=False).mean()
+
+    return data
 
 
-def get_second_wednesday(date):
-    # 获取给定月份的第一天
-    first_day = date.replace(day=1)
-    # 找到第一个周三
-    first_wednesday = first_day + timedelta(days=(2 - first_day.weekday() + 7) % 7)
-    # 第二个周三
-    second_wednesday = first_wednesday + timedelta(days=7)
-    return second_wednesday
+def calculate_grid_levels(current_price):
+    grid_step = (config['grid_range'] * current_price) / config['grid_levels']
+    return [current_price * (1 - config['grid_range'] / 2 + i * grid_step / current_price) for i in
+            range(config['grid_levels'])]
 
 
-def get_nearest_business_day(date, data_index):
-    while date not in data_index:
-        date += timedelta(days=1)
-        if date > data_index[-1]:
-            return data_index[-1]  # 如果超出数据范围，返回最后一个可用日期
-    return date
+def execute_trade(price, cash, shares, grid_levels):
+    for i, level in enumerate(grid_levels):
+        if price <= level:
+            buy_amount = config['base_investment'] * (i + 1) / config['grid_levels']
+            if cash >= buy_amount:
+                shares_to_buy = buy_amount / price
+                cash -= buy_amount
+                shares += shares_to_buy
+            break
+        elif price > level and i == len(grid_levels) - 1:
+            if shares > 0:
+                sell_amount = config['base_investment'] / config['grid_levels']
+                shares_to_sell = min(sell_amount / price, shares)
+                cash += shares_to_sell * price
+                shares -= shares_to_sell
+    return cash, shares
 
 
-def get_investment_dates(start_date, end_date, data_index):
-    investment_dates = []
-    current_date = start_date.replace(day=1)  # 从起始日期的当月开始
-
-    while current_date <= end_date:
-        # 获取当月第二周的周三
-        investment_date = get_second_wednesday(current_date)
-
-        # 如果投资日期在数据范围内，则添加到列表
-        if start_date <= investment_date <= end_date:
-            # 获取最近的交易日（如果当天不是交易日，则向后顺延）
-            actual_investment_date = get_nearest_business_day(investment_date, data_index)
-            investment_dates.append(actual_investment_date)
-
-        # 移动到下一个月
-        current_date = (current_date.replace(day=1) + timedelta(days=32)).replace(day=1)
-
-    return investment_dates
+def calculate_drawdown(equity_curve):
+    rolling_max = equity_curve.cummax()
+    drawdown = (equity_curve - rolling_max) / rolling_max
+    return drawdown
 
 
-def calculate_weight(current_price, last_buy_price):
-    if last_buy_price is None:
-        return 1  # 第一次投资
+def run_strategy():
+    # Download data
+    spy_data = download_data(config['ticker'], config['start_date'], config['end_date'])
+    vix_data = download_data(config['vix_ticker'], config['start_date'], config['end_date'])
 
-    price_change = (current_price - last_buy_price) / last_buy_price
+    # Combine data and calculate indicators
+    data = pd.DataFrame({'SPY': spy_data, 'VIX': vix_data})
+    data = data.dropna()
+    data = calculate_indicators(data['SPY'])
+    data['VIX'] = vix_data
 
-    if price_change < -0.2:
-        return 2
-    elif -0.2 <= price_change < -0.1:
-        return 2
-    elif -0.1 <= price_change < -0.05:
-        return 1.5
-    elif -0.05 <= price_change < 0.05:
-        return 1
-    elif 0.05 <= price_change < 0.1:
-        return 0.7
-    elif 0.1 <= price_change < 0.2:
-        return 0.5
-    else:
-        return 0.5
+    # Initialize variables
+    cash = config['base_investment']
+    shares = 0
+    equity = []
+    grid_levels = calculate_grid_levels(data['SPY'].iloc[0])
 
+    # Run strategy
+    for date, row in data.iterrows():
+        price = row['SPY']
 
-# 修改 save_to_excel 函数
-def save_to_excel(data, equal_investment, weighted_investment, shares_bought, ticker, start_date, end_date):
-    investment_dates = equal_investment.index
-    excel_data = pd.DataFrame(index=investment_dates)
+        # Check for bear market conditions
+        if row['VIX'] > config['vix_threshold'] or row['RSI'] < config['rsi_oversold']:
+            # In potential bear market, reduce position
+            if shares > 0:
+                cash += shares * price * 0.5
+                shares *= 0.5
+        elif row['RSI'] > config['rsi_overbought'] and row['MACD'] < row['Signal_Line']:
+            # Overbought condition, sell some shares
+            if shares > 0:
+                cash += shares * price * 0.2
+                shares *= 0.8
+        else:
+            # Normal market conditions, execute grid strategy
+            cash, shares = execute_trade(price, cash, shares, grid_levels)
 
-    excel_data['日期'] = investment_dates
-    excel_data['收盘价'] = data.loc[investment_dates, ticker].round(2)
-    excel_data['等权投资金额'] = equal_investment[ticker].round(2)
-    excel_data['加权投资金额'] = weighted_investment[ticker].round(2)
-    excel_data['等权买入股数'] = (equal_investment[ticker] / excel_data['收盘价']).round(0).astype(int)
-    excel_data['加权买入股数'] = shares_bought[ticker].round(0).astype(int)
+        # Recalculate grid levels monthly
+        if date.month != data.index[data.index.get_loc(date) - 1].month:
+            grid_levels = calculate_grid_levels(price)
 
-    # 计算累计持股数和累计投资金额
-    excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum()
-    excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum()
-    excel_data['等权累计投资'] = excel_data['等权投资金额'].cumsum().round(2)
-    excel_data['加权累计投资'] = excel_data['加权投资金额'].cumsum().round(2)
+        equity.append(cash + shares * price)
 
-    # 计算累计市值
-    excel_data['等权累计市值'] = (excel_data['等权累计持股数'] * excel_data['收盘价']).round(2)
-    excel_data['加权累计市值'] = (excel_data['加权累计持股数'] * excel_data['收盘价']).round(2)
+    equity_curve = pd.Series(equity, index=data.index)
+    drawdown = calculate_drawdown(equity_curve)
 
-    # 计算平均成本
-    excel_data['等权平均成本'] = (excel_data['等权累计投资'] / excel_data['等权累计持股数']).round(2)
-    excel_data['加权平均成本'] = (excel_data['加权累计投资'] / excel_data['加权累计持股数']).round(2)
+    # Calculate performance metrics
+    total_return = (equity[-1] - config['base_investment']) / config['base_investment']
+    annual_return = (1 + total_return) ** (365.25 / (data.index[-1] - data.index[0]).days) - 1
+    max_drawdown = drawdown.min()
 
-    # 计算累计收益
-    excel_data['等权累计收益'] = (excel_data['等权累计市值'] - excel_data['等权累计投资']).round(2)
-    excel_data['加权累计收益'] = (excel_data['加权累计市值'] - excel_data['加权累计投资']).round(2)
+    print(f"Total Return: {total_return:.2%}")
+    print(f"Annual Return: {annual_return:.2%}")
+    print(f"Max Drawdown: {max_drawdown:.2%}")
 
-    # 添加基础投资金额到 Excel 文件
-    excel_data['基础投资金额'] = config['base_investment']
-
-    # 创建 output 目录（如果不存在）
-    output_dir = 'output'
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # 修改文件保存路径
-    filename = os.path.join(output_dir,
-                            f"{ticker}_投资数据_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx")
-    excel_data.to_excel(filename, index=False)
-    print(f"数据已保存到文件: {filename}")
-
-    # 保存累计收益数值
-    equal_cumulative_returns = excel_data['等权累计收益']
-    weighted_cumulative_returns = excel_data['加权累计收益']
-
-    # 打印累计收益数值到终端
-    print("\n等权累计收益:")
-    print(equal_cumulative_returns)
-    print("\n加权累计收益:")
-    print(weighted_cumulative_returns)
-
-    # 返回累计收益数值
-    return equal_cumulative_returns, weighted_cumulative_returns
-
-
-def analyze_and_plot(ticker, start_date, end_date):
-    # 下载数据
-    data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
-
-    # 确保数据是浮点数类型
-    data = data.astype(float)
-
-    # 计算技术指标
-    data = pd.DataFrame(data)
-    data.columns = [ticker]
-    data[f'{ticker}_SMA'] = data[ticker].rolling(window=config['sma_window']).mean()
-    data[f'{ticker}_STD'] = data[ticker].rolling(window=config['std_window']).std()
-    data[f'{ticker}_AVG_STD'] = data[f'{ticker}_STD'].expanding().mean()
-
-    # 计算MACD
-    data[f'{ticker}_MACD'], data[f'{ticker}_MACD_SIGNAL'], _ = calculate_macd(
-        data[ticker],
-        short_window=config['macd_short_window'],
-        long_window=config['macd_long_window'],
-        signal_window=config['macd_signal_window']
-    )
-
-    # 将索引转换为日期类型
-    data.index = pd.to_datetime(data.index).date
-
-    # 创建投资日期列表
-    investment_dates = get_investment_dates(start_date, end_date, data.index)
-
-    if not investment_dates:
-        raise ValueError("选定的日期范围内没有可用的投资日期")
-
-    # 初始化结果DataFrame
-    results = pd.DataFrame(index=investment_dates, columns=[ticker])
-    investment_amounts = pd.DataFrame(index=investment_dates, columns=[ticker])
-    last_buy_price = None
-
-    # 使用更新后的 base_investment 值
-    base_investment = config['base_investment']
-
-    # 模拟投资
-    for d in investment_dates:
-        price = data.loc[d, ticker]
-        weight = calculate_weight(price, last_buy_price)
-        investment_amount, shares_bought = calculate_investment(price, weight, base_investment)
-
-        results.loc[d, ticker] = shares_bought
-        investment_amounts.loc[d, ticker] = investment_amount
-
-        last_buy_price = price
-
-    # 确保 investment_dates 中的日期都在 data 中存在
-    valid_investment_dates = [date for date in investment_dates if date in data.index]
-
-    # 计算等额定投策略
-    equal_investment = pd.DataFrame(index=investment_dates, columns=[ticker])
-    equal_shares = pd.DataFrame(index=investment_dates, columns=[ticker])
-    for d in investment_dates:
-        price = data.loc[d, ticker]
-        equal_shares.loc[d, ticker] = base_investment // price
-        equal_investment.loc[d, ticker] = equal_shares.loc[d, ticker] * price
-
-    # 处理可能的零值
-    price_data = data.loc[valid_investment_dates, ticker]
-    price_data = price_data.replace(0, np.nan)  # 将零值替换为 NaN
-    equal_shares = equal_investment.divide(price_data, axis=0)
-
-    # 计算累积份额和策略价值
-    equal_cumulative_shares = equal_shares.cumsum()
-    weighted_cumulative_shares = results.cumsum()
-
-    last_valid_date = data.index[-1]
-    equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
-    weighted_portfolio_values = weighted_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
-
-    # 计算累计收益
-    equal_cumulative_returns = equal_portfolio_value.subtract(equal_investment.cumsum(), axis=0)
-    weighted_cumulative_returns = weighted_portfolio_values.subtract(investment_amounts.cumsum(), axis=0)
-
-
-    # 使用更新后的 save_to_excel 函数
-    equal_returns, weighted_returns = save_to_excel(data, equal_investment, investment_amounts, results, ticker,
-                                                    start_date, end_date)
-
-    # 清除旧图形
-    plt.clf()
-    # 修改绘图部分
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
-    fig.subplots_adjust(hspace=0.1)
-
-    # 绘制累计收益
-    ax1.plot(equal_returns.index, equal_returns, label=f'{ticker} 等权累计收益', linestyle='--', color='orange')
-    ax1.plot(weighted_returns.index, weighted_returns, label=f'{ticker} 加权累计收益', color='blue')
-
-    ax1.set_title(f'{ticker}: 加权累计收益 vs 等权累计收益 ({start_date.year}-{end_date.year})')
-    ax1.set_ylabel('累计收益 ($)')
+    # Plot results
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+    ax1.plot(data.index, data['SPY'], label='SPY Price')
+    ax1.plot(equity_curve.index, equity_curve, label='Portfolio Value')
+    ax1.set_title('SPY Price and Portfolio Value')
     ax1.legend()
-    ax1.grid(True)
 
-    # 添加零线
-    ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
+    ax2.plot(drawdown.index, drawdown, label='Drawdown')
+    ax2.axhline(y=-config['max_drawdown_threshold'], color='r', linestyle='--', label='Max Drawdown Threshold')
+    ax2.set_title('Portfolio Drawdown')
+    ax2.legend()
 
-    # 确保 y 轴的范围包含所有数据点，包括负值
-    y_min = min(equal_returns.min(), weighted_returns.min())
-    y_max = max(equal_returns.max(), weighted_returns.max())
-    # 给顶部和底部一些额外的空间
-    y_range = y_max - y_min
-    ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
-
-    print(f"Final weighted cumulative return plotted: {weighted_cumulative_returns[ticker].iloc[-1]:.2f}")
-    print(f"Final equal cumulative return plotted: {equal_cumulative_returns[ticker].iloc[-1]:.2f}")
-
-    # 添加数据点标注
-    ax1.scatter(weighted_returns.index[-1], weighted_returns.iloc[-1], color='blue')
-    ax1.annotate(f'{weighted_returns.iloc[-1]:.2f}',
-                 (weighted_returns.index[-1], weighted_returns.iloc[-1]),
-                 textcoords="offset points", xytext=(0, 10), ha='center')
-
-    ax1.scatter(equal_returns.index[-1], equal_returns.iloc[-1], color='orange')
-    ax1.annotate(f'{equal_returns.iloc[-1]:.2f}',
-                 (equal_returns.index[-1], equal_returns.iloc[-1]),
-                 textcoords="offset points", xytext=(0, 10), ha='center')
-
-    # 获取图表中的实际值
-    weighted_line = ax1.get_lines()[0]
-    equal_line = ax1.get_lines()[1]
-    print(f"Final weighted cumulative return on chart: {weighted_line.get_ydata()[-1]:.2f}")
-    print(f"Final equal cumulative return on chart: {equal_line.get_ydata()[-1]:.2f}")
-
-    # 绘制MACD
-    ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
-    ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
-    ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'], label='Histogram', color='gray',
-            alpha=0.5)
-    ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
-    ax2.set_ylabel('MACD')
-    ax2.legend(loc='upper left')
-    ax2.grid(True)
-
-    # 设置x轴标签
-    ax2.set_xlabel('日期')
-
-    # 设置 x 轴刻度
-    years = mdates.YearLocator(2)  # 每两年
-    months = mdates.MonthLocator()  # 每月
-    years_fmt = mdates.DateFormatter('%Y')
-
-    ax2.xaxis.set_major_locator(years)
-    ax2.xaxis.set_major_formatter(years_fmt)
-    ax2.xaxis.set_minor_locator(months)
-
-    # 格式化 x 轴
-    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
-
-    # 自动调整日期范围
-    ax2.set_xlim(data.index[0], data.index[-1])
-
-    # 更新摘要统计
-    total_equal_investment = equal_investment[ticker].sum()
-    total_weighted_investment = investment_amounts[ticker].sum()
-
-    equal_final_value = total_equal_investment + equal_returns.iloc[-1]
-    weighted_final_value = total_weighted_investment + weighted_returns.iloc[-1]
-
-    equal_total_return = (equal_final_value / total_equal_investment - 1) * 100
-    weighted_total_return = (weighted_final_value / total_weighted_investment - 1) * 100
-
-    # 计算实际的投资日期范围
-    actual_start_date = equal_returns.index[0]
-    actual_end_date = equal_returns.index[-1]
-    investment_period_days = (actual_end_date - actual_start_date).days
-
-    equal_annual_return = ((equal_final_value / total_equal_investment) ** (365.25 / investment_period_days) - 1) * 100
-    weighted_annual_return = ((weighted_final_value / total_weighted_investment) ** (
-                365.25 / investment_period_days) - 1) * 100
-
-    # 更新摘要统计文本
-    summary = f"\n{ticker} 的摘要统计：\n"
-    summary += f"等额定投:\n"
-    summary += f"  总投资: ${total_equal_investment:.2f}\n"
-    summary += f"  最终价值: ${equal_final_value:.2f}\n"
-    summary += f"  累计收益: ${equal_returns.iloc[-1]:.2f}\n"
-    summary += f"  总回报率: {equal_total_return:.2f}%\n"
-    summary += f"  年化回报率: {equal_annual_return:.2f}%\n"
-    summary += f"加权定投:\n"
-    summary += f"  总投资: ${total_weighted_investment:.2f}\n"
-    summary += f"  最终价值: ${weighted_final_value:.2f}\n"
-    summary += f"  累计收益: ${weighted_returns.iloc[-1]:.2f}\n"
-    summary += f"  总回报率: {weighted_total_return:.2f}%\n"
-    summary += f"  年化回报率: {weighted_annual_return:.2f}%\n"
-
-    ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    # 调整布局
     plt.tight_layout()
-
-    # save_to_excel(data, equal_investment, investment_amounts, results, ticker, start_date, end_date)
-
-    return fig
+    plt.show()
 
 
-# 创建GUI
-root = tk.Tk()
-root.title("投资策略分析")
-root.geometry("1024x768")  # 设置窗口大小
-
-# 创建左侧框架用于放置控件
-left_frame = ttk.Frame(root, padding="10")
-left_frame.pack(side=tk.LEFT, fill=tk.Y, expand=False)
-
-# 创建日期输入框和标签
-start_date_label = ttk.Label(left_frame, text="起始日期 (YYYY-MM):")
-start_date_label.pack(anchor=tk.W, pady=(0, 5))
-start_date_entry = ttk.Entry(left_frame, width=10)
-start_date_entry.pack(anchor=tk.W, pady=(0, 10))
-start_date_entry.insert(0, "2022-01")  # 默认起始日期
-
-end_date_label = ttk.Label(left_frame, text="结束日期 (YYYY-MM):")
-end_date_label.pack(anchor=tk.W, pady=(0, 5))
-end_date_entry = ttk.Entry(left_frame, width=10)
-end_date_entry.pack(anchor=tk.W, pady=(0, 10))
-end_date_entry.insert(0, datetime.now().strftime("%Y-%m"))  # 默认结束日期为当前月份
-
-# 创建下拉菜单
-ticker_label = ttk.Label(left_frame, text="选择股票:")
-ticker_label.pack(anchor=tk.W, pady=(10, 5))
-ticker_var = tk.StringVar()
-ticker_dropdown = ttk.Combobox(left_frame, textvariable=ticker_var, values=config['tickers'], width=10)
-ticker_dropdown.set(config['tickers'][0])  # 设置默认值
-ticker_dropdown.pack(anchor=tk.W, pady=(0, 10))
-
-# 创建右侧框架用于放置图表
-right_frame = ttk.Frame(root, padding="10")
-right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-# 在创建下拉菜单之后，添加以下代码
-base_investment_label = ttk.Label(left_frame, text="基础投资金额 ($):")
-base_investment_label.pack(anchor=tk.W, pady=(10, 5))
-base_investment_entry = ttk.Entry(left_frame, width=10)
-base_investment_entry.pack(anchor=tk.W, pady=(0, 10))
-base_investment_entry.insert(0, str(config['base_investment']))  # 设置默认值
-
-# 创建画布
-canvas = FigureCanvasTkAgg(plt.Figure(figsize=(10, 6)), master=right_frame)
-canvas_widget = canvas.get_tk_widget()
-canvas_widget.pack(fill=tk.BOTH, expand=True)
-
-
-def update_plot():
-    ticker = ticker_var.get()
-    try:
-        start_date = datetime.strptime(start_date_entry.get(), "%Y-%m").date()
-        end_date = datetime.strptime(end_date_entry.get(), "%Y-%m").date()
-        # 将结束日期调整到月末
-        end_date = (date(end_date.year, end_date.month, 1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-
-        # 更新基础投资金额
-        new_base_investment = float(base_investment_entry.get())
-        if new_base_investment <= 0:
-            raise ValueError("基础投资金额必须大于0")
-        config['base_investment'] = new_base_investment
-    except ValueError as e:
-        messagebox.showerror("错误", f"请输入有效的日期格式 (YYYY-MM) 和基础投资金额: {str(e)}")
-        return
-
-    if ticker not in config['tickers']:
-        messagebox.showerror("错误", "选择的标的不存在")
-        return
-    if start_date >= end_date:
-        messagebox.showerror("错误", "起始日期必须早于结束日期")
-        return
-
-    try:
-        fig = analyze_and_plot(ticker, start_date, end_date)
-
-        # 清除旧的图形内容
-        for widget in right_frame.winfo_children():
-            widget.destroy()
-
-        # 创建新的画布并显示更新后的图形
-        canvas = FigureCanvasTkAgg(fig, master=right_frame)
-        canvas_widget = canvas.get_tk_widget()
-        canvas_widget.pack(fill=tk.BOTH, expand=True)
-        canvas.draw()
-    except Exception as e:
-        messagebox.showerror("错误", f"分析过程中出现错误: {str(e)}")
-
-
-# 创建更新按钮
-update_button = ttk.Button(left_frame, text="更新图表", command=update_plot)
-update_button.pack(pady=10)
-
-# 初始绘图
-update_plot()
-
-# 运行GUI主循环
-root.mainloop()
+if __name__ == "__main__":
+    run_strategy()
