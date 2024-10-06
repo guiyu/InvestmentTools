@@ -6,6 +6,3 @@ schedule
 Pillow
 qrcode
 requests
-
-# 可能需要的额外依赖
-tkinter  # 通常随Python一起安装，可能不需要单独列出

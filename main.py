@@ -1,3 +1,4 @@
+import json
 import os
 import yfinance as yf
 import numpy as np
@@ -9,7 +10,7 @@ from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import pandas as pd
-import schedule
+import schedule as schedule_lib
 import time
 from wxpy import Bot, ensure_one
 import threading
@@ -24,6 +25,8 @@ class InvestmentApp:
         self.master = master
         self.master.title("投资策略分析")
         self.master.geometry("1024x768")
+        self.token_file = 'pushplus_token.json'
+        self.pushplus_token = self.load_token()
 
         # Vanguard Dividend Appreciation ETF (VIG)
         # 特点：VIG专注于持有持续增加股息的大型公司。具有高质量、低波动的特性，在熊市中往往表现较好，因为这些公司通常具有较强的盈利能力和稳健的现金流。
@@ -73,6 +76,17 @@ class InvestmentApp:
         self.reminder_thread = None
         self.create_widgets()
 
+    def load_token(self):
+        if os.path.exists(self.token_file):
+            with open(self.token_file, 'r') as f:
+                data = json.load(f)
+                return data.get('token')
+        return None
+
+    def save_token(self, token):
+        with open(self.token_file, 'w') as f:
+            json.dump({'token': token}, f)
+
     def create_widgets(self):
         # 创建左侧框架
         self.left_frame = ttk.Frame(self.master, padding="10")
@@ -111,20 +125,37 @@ class InvestmentApp:
 
     def pushplus_login(self):
         if self.pushplus_sender is None:
-            token = tk.simpledialog.askstring("PushPlus Token", "请输入您的PushPlus Token:")
+            token = self.pushplus_token
+            if not token:
+                token = tk.simpledialog.askstring(
+                    "PushPlus Token",
+                    "请输入您的PushPlus Token:\n\n"
+                    "如果您还没有 Token，请访问 https://www.pushplus.plus/ 获取。\n"
+                    "在该网站注册并登录后，您可以在个人中心找到您的 Token。"
+                )
             if token:
                 self.pushplus_sender = PushPlusSender(token)
                 test_result = self.pushplus_sender.send_message("登录测试", "PushPlus登录成功")
                 if test_result:
                     messagebox.showinfo("登录成功", "PushPlus登录成功！")
                     self.login_button.config(text="退出登录")
+                    self.pushplus_token = token
+                    self.save_token(token)
                 else:
                     messagebox.showerror("登录失败", "PushPlus登录失败，请检查您的Token。")
                     self.pushplus_sender = None
+                    self.pushplus_token = None
         else:
             self.pushplus_sender = None
+            self.pushplus_token = None
+            self.save_token(None)
             self.login_button.config(text="PushPlus登录")
             messagebox.showinfo("退出成功", "已退出PushPlus登录")
+
+    def destroy(self):
+        if self.pushplus_token:
+            self.save_token(self.pushplus_token)
+        self.master.destroy()
 
     def create_date_inputs(self):
         ttk.Label(self.left_frame, text="起始日期 (YYYY-MM):").pack(anchor=tk.W, pady=(0, 5))
@@ -238,18 +269,18 @@ class InvestmentApp:
         self.reminder_button.config(text="停止提醒")
         messagebox.showinfo("提醒已启动", "定投提醒功能已启动")
 
+    def run_reminder(self):
+        schedule_lib.every().day.at("08:00").do(self.send_investment_reminder)
+        while self.reminder_thread:
+            schedule_lib.run_pending()
+            time.sleep(60)
+
     def stop_reminder(self):
         if self.reminder_thread:
-            schedule.clear()
+            schedule_lib.clear()
             self.reminder_thread = None
             self.reminder_button.config(text="启动提醒")
             messagebox.showinfo("提醒已停止", "定投提醒功能已停止")
-
-    def run_reminder(self):
-        schedule.every().day.at("08:00").do(self.send_investment_reminder)
-        while self.reminder_thread:
-            schedule.run_pending()
-            time.sleep(60)
 
     def send_investment_reminder(self):
         if self.pushplus_sender is None:
@@ -604,4 +635,5 @@ class InvestmentApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = InvestmentApp(root)
+    root.protocol("WM_DELETE_WINDOW", app.destroy)
     root.mainloop()
