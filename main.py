@@ -9,6 +9,14 @@ from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import pandas as pd
+import schedule
+import time
+from wxpy import Bot, ensure_one
+import threading
+import io
+from PIL import Image, ImageTk
+import qrcode
+from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
 
 
 class InvestmentApp:
@@ -59,6 +67,10 @@ class InvestmentApp:
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
         plt.rcParams['axes.unicode_minus'] = False
 
+        self.pushplus_sender = None
+        self.reminder_thread = None
+        self.bot = None
+        self.reminder_thread = None
         self.create_widgets()
 
     def create_widgets(self):
@@ -79,6 +91,14 @@ class InvestmentApp:
         self.update_button = ttk.Button(self.left_frame, text="更新图表", command=self.update_plot)
         self.update_button.pack(pady=10)
 
+        # 创建微信登录按钮
+        self.login_button = ttk.Button(self.left_frame, text="PushPlus登录", command=self.pushplus_login)
+        self.login_button.pack(pady=10)
+
+        # 创建启动/停止提醒按钮
+        self.reminder_button = ttk.Button(self.left_frame, text="启动提醒", command=self.toggle_reminder)
+        self.reminder_button.pack(pady=10)
+
         # 创建右侧框架
         self.right_frame = ttk.Frame(self.master, padding="10")
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -88,6 +108,23 @@ class InvestmentApp:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_frame)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+    def pushplus_login(self):
+        if self.pushplus_sender is None:
+            token = tk.simpledialog.askstring("PushPlus Token", "请输入您的PushPlus Token:")
+            if token:
+                self.pushplus_sender = PushPlusSender(token)
+                test_result = self.pushplus_sender.send_message("登录测试", "PushPlus登录成功")
+                if test_result:
+                    messagebox.showinfo("登录成功", "PushPlus登录成功！")
+                    self.login_button.config(text="退出登录")
+                else:
+                    messagebox.showerror("登录失败", "PushPlus登录失败，请检查您的Token。")
+                    self.pushplus_sender = None
+        else:
+            self.pushplus_sender = None
+            self.login_button.config(text="PushPlus登录")
+            messagebox.showinfo("退出成功", "已退出PushPlus登录")
 
     def create_date_inputs(self):
         ttk.Label(self.left_frame, text="起始日期 (YYYY-MM):").pack(anchor=tk.W, pady=(0, 5))
@@ -139,15 +176,105 @@ class InvestmentApp:
         try:
             fig = self.analyze_and_plot(ticker, start_date, end_date)
 
+            # 清除旧的图形内容
             for widget in self.right_frame.winfo_children():
                 widget.destroy()
 
-            canvas = FigureCanvasTkAgg(fig, master=self.right_frame)
-            canvas_widget = canvas.get_tk_widget()
-            canvas_widget.pack(fill=tk.BOTH, expand=True)
-            canvas.draw()
+            # 创建新的画布并显示更新后的图形
+            self.canvas = FigureCanvasTkAgg(fig, master=self.right_frame)
+            self.canvas_widget = self.canvas.get_tk_widget()
+            self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+            self.canvas.draw()
+
+            print("图形已更新")  # 添加这行来确认方法执行到此处
         except Exception as e:
             messagebox.showerror("错误", f"分析过程中出现错误: {str(e)}")
+            print(f"错误详情: {str(e)}")  # 添加这行来打印详细错误信息
+
+    def wechat_login(self):
+        if self.bot is None:
+            try:
+                self.bot = Bot(cache_path=True)
+                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr.add_data(self.bot.uuid)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+
+                # 将二维码图片显示在GUI上
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                image = Image.open(buffer)
+                photo = ImageTk.PhotoImage(image)
+
+                qr_window = tk.Toplevel(self.master)
+                qr_window.title("微信登录")
+                qr_label = ttk.Label(qr_window, image=photo)
+                qr_label.image = photo
+                qr_label.pack()
+
+                messagebox.showinfo("登录成功", "微信登录成功！")
+                self.login_button.config(text="退出登录")
+            except Exception as e:
+                messagebox.showerror("登录失败", f"微信登录失败: {str(e)}")
+        else:
+            self.bot.logout()
+            self.bot = None
+            self.login_button.config(text="微信登录")
+            messagebox.showinfo("退出成功", "已退出微信登录")
+
+    def toggle_reminder(self):
+        if self.reminder_thread is None:
+            self.start_reminder()
+        else:
+            self.stop_reminder()
+
+    def start_reminder(self):
+        if self.pushplus_sender is None:
+            messagebox.showerror("错误", "请先登录PushPlus")
+            return
+
+        self.reminder_thread = threading.Thread(target=self.run_reminder, daemon=True)
+        self.reminder_thread.start()
+        self.reminder_button.config(text="停止提醒")
+        messagebox.showinfo("提醒已启动", "定投提醒功能已启动")
+
+    def stop_reminder(self):
+        if self.reminder_thread:
+            schedule.clear()
+            self.reminder_thread = None
+            self.reminder_button.config(text="启动提醒")
+            messagebox.showinfo("提醒已停止", "定投提醒功能已停止")
+
+    def run_reminder(self):
+        schedule.every().day.at("08:00").do(self.send_investment_reminder)
+        while self.reminder_thread:
+            schedule.run_pending()
+            time.sleep(60)
+
+    def send_investment_reminder(self):
+        if self.pushplus_sender is None:
+            print("PushPlus未登录，无法发送提醒")
+            return
+
+        today = datetime.now().date()
+        if self.get_second_wednesday(today) == today:
+            for ticker in self.config['tickers']:
+                data = yf.download(ticker, start=today - timedelta(days=365), end=today)['Adj Close']
+                if not data.empty:
+                    current_price = data.iloc[-1]
+                    weight = self.calculate_weight(current_price, data.iloc[-2] if len(data) > 1 else None)
+                    investment_amount, shares_to_buy = self.calculate_investment(current_price, weight,
+                                                                                 self.config['base_investment'])
+
+                    message = (f"今日是定投日，股票 {ticker} 的定投提醒：\n"
+                               f"收盘价: ${current_price:.2f}\n"
+                               f"建议购买股数: {shares_to_buy}\n"
+                               f"加权投资金额: ${investment_amount:.2f}")
+
+                    self.pushplus_sender.send_message(f"{ticker}定投提醒", message)
+                    print(f"已发送 {ticker} 的定投提醒")
+        else:
+            print("今天不是定投日")
 
     # 将所有之前的独立函数转换为类方法
     def calculate_macd(self, data, short_window=12, long_window=26, signal_window=9):
@@ -471,9 +598,6 @@ class InvestmentApp:
 
         # 调整布局
         plt.tight_layout()
-
-        # save_to_excel(data, equal_investment, investment_amounts, results, ticker, start_date, end_date)
-
         return fig
 
 
