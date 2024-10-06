@@ -6,3 +6,4 @@ schedule
 Pillow
 qrcode
 requests
+pytz

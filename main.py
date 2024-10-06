@@ -16,6 +16,8 @@ from wxpy import Bot, ensure_one
 import threading
 import io
 from PIL import Image, ImageTk
+import pytz
+from datetime import datetime, time
 import qrcode
 from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
 
@@ -105,6 +107,10 @@ class InvestmentApp:
         self.update_button = ttk.Button(self.left_frame, text="更新图表", command=self.update_plot)
         self.update_button.pack(pady=10)
 
+        # 添加"当天定投估值"按钮
+        self.estimate_button = ttk.Button(self.left_frame, text="当天定投估值", command=self.estimate_today_investment)
+        self.estimate_button.pack(pady=10)
+
         # 创建微信登录按钮
         self.login_button = ttk.Button(self.left_frame, text="PushPlus登录", command=self.pushplus_login)
         self.login_button.pack(pady=10)
@@ -112,6 +118,7 @@ class InvestmentApp:
         # 创建启动/停止提醒按钮
         self.reminder_button = ttk.Button(self.left_frame, text="启动提醒", command=self.toggle_reminder)
         self.reminder_button.pack(pady=10)
+
 
         # 创建右侧框架
         self.right_frame = ttk.Frame(self.master, padding="10")
@@ -122,6 +129,87 @@ class InvestmentApp:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_frame)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+    def estimate_today_investment(self):
+        if self.pushplus_sender is None:
+            messagebox.showerror("错误", "请先登录PushPlus")
+            return
+
+        ticker = self.ticker_var.get()
+        beijing_tz = pytz.timezone('Asia/Shanghai')
+        now = datetime.now(beijing_tz)
+
+        # 获取股票数据
+        stock = yf.Ticker(ticker)
+
+        # 检查是否在交易时间
+        trading_start = time(9, 30)
+        trading_end = time(16, 0)
+        current_time = now.time()
+
+        try:
+            if trading_start <= current_time <= trading_end and now.weekday() < 5:
+                # 交易时间，获取当前价格
+                current_price = stock.info['regularMarketPrice']
+            else:
+                # 非交易时间，获取最近的收盘价
+                end_date = now.date()
+                start_date = end_date - timedelta(days=5)  # 获取过去5天的数据
+                hist = stock.history(start=start_date, end=end_date)
+                if hist.empty:
+                    raise ValueError("无法获取历史数据")
+                current_price = hist['Close'].iloc[-1]
+
+            # 计算建议购买的股票数和投资金额
+            weight = self.calculate_weight(current_price, None)  # 假设这是首次购买
+            investment_amount, shares_to_buy = self.calculate_investment(current_price, weight,
+                                                                         self.config['base_investment'])
+
+            # 准备消息内容
+            message = (
+                f"定投估值报告 ({now.strftime('%Y-%m-%d %H:%M:%S')} 北京时间)\n"
+                f"股票: {ticker}\n"
+                f"当前价格: ${current_price:.2f}\n"
+                f"建议购买股数: {shares_to_buy}\n"
+                f"本次投资金额: ${investment_amount:.2f}"
+            )
+
+            # 发送消息
+            self.pushplus_sender.send_message("今日定投估值", message)
+
+            # 保存投资信息
+            self.save_investment_info(ticker, now, current_price, shares_to_buy, investment_amount)
+
+            messagebox.showinfo("估值完成", "定投估值已完成，请查看PushPlus消息。")
+
+        except Exception as e:
+            error_message = f"估值过程中出现错误: {str(e)}"
+            messagebox.showerror("错误", error_message)
+            print(error_message)  # 打印错误信息到控制台以便调试
+
+    def save_investment_info(self, ticker, date, price, shares, amount):
+        investment_file = 'investment_history.json'
+
+        # 读取现有的投资历史
+        if os.path.exists(investment_file):
+            with open(investment_file, 'r') as f:
+                history = json.load(f)
+        else:
+            history = []
+
+        # 添加新的投资信息
+        investment_info = {
+            'date': date.strftime('%Y-%m-%d %H:%M:%S'),
+            'ticker': ticker,
+            'price': price,
+            'shares': shares,
+            'amount': amount
+        }
+        history.append(investment_info)
+
+        # 保存更新后的历史
+        with open(investment_file, 'w') as f:
+            json.dump(history, f, indent=4)
 
     def pushplus_login(self):
         if self.pushplus_sender is None:
@@ -135,9 +223,19 @@ class InvestmentApp:
                 )
             if token:
                 self.pushplus_sender = PushPlusSender(token)
-                test_result = self.pushplus_sender.send_message("登录测试", "PushPlus登录成功")
+
+                # 获取当前北京时间
+                beijing_time = datetime.now(pytz.timezone('Asia/Shanghai'))
+                time_str = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+
+                # 发送包含时间戳的测试消息
+                test_result = self.pushplus_sender.send_message(
+                    "登录测试",
+                    f"PushPlus登录成功\n\n时间：{time_str} (北京时间)"
+                )
+
                 if test_result:
-                    messagebox.showinfo("登录成功", "PushPlus登录成功！")
+                    messagebox.showinfo("登录成功", f"PushPlus登录成功！\n\n测试消息发送时间：{time_str}")
                     self.login_button.config(text="退出登录")
                     self.pushplus_token = token
                     self.save_token(token)
