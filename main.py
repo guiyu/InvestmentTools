@@ -12,13 +12,9 @@ import matplotlib.dates as mdates
 import pandas as pd
 import schedule as schedule_lib
 import time
-from wxpy import Bot, ensure_one
 import threading
-import io
-from PIL import Image, ImageTk
 import pytz
 from datetime import datetime, time
-import qrcode
 from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
 
 
@@ -164,6 +160,8 @@ class InvestmentApp:
             weight = self.calculate_weight(current_price, None)  # 假设这是首次购买
             investment_amount, shares_to_buy = self.calculate_investment(current_price, weight,
                                                                          self.config['base_investment'])
+            # 计算下一次定投时间
+            next_investment_date = self.get_next_investment_date(now)
 
             # 准备消息内容
             message = (
@@ -171,7 +169,8 @@ class InvestmentApp:
                 f"股票: {ticker}\n"
                 f"当前价格: ${current_price:.2f}\n"
                 f"建议购买股数: {shares_to_buy}\n"
-                f"本次投资金额: ${investment_amount:.2f}"
+                f"本次投资金额: ${investment_amount:.2f}\n"
+                f"下一次预计定投时间: {next_investment_date.strftime('%Y-%m-%d')}"
             )
 
             # 发送消息
@@ -186,6 +185,13 @@ class InvestmentApp:
             error_message = f"估值过程中出现错误: {str(e)}"
             messagebox.showerror("错误", error_message)
             print(error_message)  # 打印错误信息到控制台以便调试
+
+    def get_next_investment_date(self, current_date):
+        next_date = current_date.replace(day=1) + timedelta(days=32)
+        next_date = next_date.replace(day=1)  # 下个月的第一天
+        while next_date.weekday() != 2:  # 2 表示周三
+            next_date += timedelta(days=1)
+        return next_date + timedelta(days=7)  # 第二个周三
 
     def save_investment_info(self, ticker, date, price, shares, amount):
         investment_file = 'investment_history.json'
@@ -320,36 +326,36 @@ class InvestmentApp:
             messagebox.showerror("错误", f"分析过程中出现错误: {str(e)}")
             print(f"错误详情: {str(e)}")  # 添加这行来打印详细错误信息
 
-    def wechat_login(self):
-        if self.bot is None:
-            try:
-                self.bot = Bot(cache_path=True)
-                qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                qr.add_data(self.bot.uuid)
-                qr.make(fit=True)
-                img = qr.make_image(fill_color="black", back_color="white")
-
-                # 将二维码图片显示在GUI上
-                buffer = io.BytesIO()
-                img.save(buffer, format="PNG")
-                image = Image.open(buffer)
-                photo = ImageTk.PhotoImage(image)
-
-                qr_window = tk.Toplevel(self.master)
-                qr_window.title("微信登录")
-                qr_label = ttk.Label(qr_window, image=photo)
-                qr_label.image = photo
-                qr_label.pack()
-
-                messagebox.showinfo("登录成功", "微信登录成功！")
-                self.login_button.config(text="退出登录")
-            except Exception as e:
-                messagebox.showerror("登录失败", f"微信登录失败: {str(e)}")
-        else:
-            self.bot.logout()
-            self.bot = None
-            self.login_button.config(text="微信登录")
-            messagebox.showinfo("退出成功", "已退出微信登录")
+    # def wechat_login(self):
+    #     if self.bot is None:
+    #         try:
+    #             self.bot = Bot(cache_path=True)
+    #             qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    #             qr.add_data(self.bot.uuid)
+    #             qr.make(fit=True)
+    #             img = qr.make_image(fill_color="black", back_color="white")
+    #
+    #             # 将二维码图片显示在GUI上
+    #             buffer = io.BytesIO()
+    #             img.save(buffer, format="PNG")
+    #             image = Image.open(buffer)
+    #             photo = ImageTk.PhotoImage(image)
+    #
+    #             qr_window = tk.Toplevel(self.master)
+    #             qr_window.title("微信登录")
+    #             qr_label = ttk.Label(qr_window, image=photo)
+    #             qr_label.image = photo
+    #             qr_label.pack()
+    #
+    #             messagebox.showinfo("登录成功", "微信登录成功！")
+    #             self.login_button.config(text="退出登录")
+    #         except Exception as e:
+    #             messagebox.showerror("登录失败", f"微信登录失败: {str(e)}")
+    #     else:
+    #         self.bot.logout()
+    #         self.bot = None
+    #         self.login_button.config(text="微信登录")
+    #         messagebox.showinfo("退出成功", "已退出微信登录")
 
     def toggle_reminder(self):
         if self.reminder_thread is None:
