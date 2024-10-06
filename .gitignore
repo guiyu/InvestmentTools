@@ -166,3 +166,31 @@ cython_debug/
 QR.png
 pushplus_token.json
 investment_history.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+*.env
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# IDE specific files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Application specific
+output/
+pushplus_token.json
+investment_history.json
