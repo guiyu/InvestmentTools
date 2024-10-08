@@ -51,9 +51,11 @@ class InvestmentApp:
         # 防御性：消费必需品行业在熊市中表现相对抗跌，因为无论经济状况如何，消费者仍需购买这些产品。
         # 牛市表现：虽然消费必需品行业的增长速度较为稳定，但它可以在牛市中依然提供持续的回报，并且通过稳健的股息政策进一步增强收益。
 
+        # SPLG 标普500 ETF
+
         # 配置
         self.config = {
-            'tickers': ['SPY', 'QQQ', 'XLG', 'VIG', 'USMV', 'SPLV', 'DVY', 'VDC', 'VGT', 'KWEB'],
+            'tickers': ['SPY', 'QQQ', 'XLG', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'KWEB'],
             'base_investment': 2000,
             'sma_window': 200,
             'std_window': 30,
@@ -135,10 +137,6 @@ class InvestmentApp:
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
 
     def estimate_today_investment(self):
-        if self.pushplus_sender is None:
-            messagebox.showerror("错误", "请先登录PushPlus")
-            return
-
         ticker = self.ticker_var.get()
         beijing_tz = pytz.timezone('Asia/Shanghai')
         now = datetime.now(beijing_tz)
@@ -153,8 +151,15 @@ class InvestmentApp:
 
         try:
             if trading_start <= current_time <= trading_end and now.weekday() < 5:
-                # 交易时间，获取当前价格
-                current_price = stock.info['regularMarketPrice']
+                # 交易时间，尝试获取当前价格
+                try:
+                    current_price = stock.info['regularMarketPrice']
+                except KeyError:
+                    # 如果无法获取regularMarketPrice，尝试使用最新的收盘价
+                    hist = stock.history(period="1d")
+                    if hist.empty:
+                        raise ValueError("无法获取当前价格和历史数据")
+                    current_price = hist['Close'].iloc[-1]
             else:
                 # 非交易时间，获取最近的收盘价
                 end_date = now.date()
@@ -173,7 +178,8 @@ class InvestmentApp:
 
             # 准备消息内容
             message = (
-                f"定投估值报告 ({now.strftime('%Y-%m-%d %H:%M:%S')} 北京时间)\n"
+                f"定投估值报告\n\n"
+                f"日期时间: {now.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)\n"
                 f"股票: {ticker}\n"
                 f"当前价格: ${current_price:.2f}\n"
                 f"建议购买股数: {shares_to_buy}\n"
@@ -181,13 +187,11 @@ class InvestmentApp:
                 f"下一次预计定投时间: {next_investment_date.strftime('%Y-%m-%d')}"
             )
 
-            # 发送消息
-            self.pushplus_sender.send_message("今日定投估值", message)
+            # 在GUI中显示消息
+            messagebox.showinfo("今日定投估值", message)
 
             # 保存投资信息
             self.save_investment_info(ticker, now, current_price, shares_to_buy, investment_amount)
-
-            messagebox.showinfo("估值完成", "定投估值已完成，请查看PushPlus消息。")
 
         except Exception as e:
             error_message = f"估值过程中出现错误: {str(e)}"
