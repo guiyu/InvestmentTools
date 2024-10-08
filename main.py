@@ -16,6 +16,7 @@ import threading
 import pytz
 from datetime import datetime, time
 from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
+from investment_tracker import InvestmentTracker
 
 
 class InvestmentApp:
@@ -25,6 +26,9 @@ class InvestmentApp:
         self.master.geometry("1024x768")
         self.token_file = 'pushplus_token.json'
         self.pushplus_token = self.load_token()
+        self.investment_tracker = None
+        self.is_logged_in = False
+
 
         # Vanguard Dividend Appreciation ETF (VIG)
         # 特点：VIG专注于持有持续增加股息的大型公司。具有高质量、低波动的特性，在熊市中往往表现较好，因为这些公司通常具有较强的盈利能力和稳健的现金流。
@@ -112,6 +116,10 @@ class InvestmentApp:
         # 创建微信登录按钮
         self.login_button = ttk.Button(self.left_frame, text="PushPlus登录", command=self.pushplus_login)
         self.login_button.pack(pady=10)
+
+        # 添加"输入投资信息"按钮
+        self.input_investment_button = ttk.Button(self.left_frame, text="输入投资信息", command=self.show_investment_input_dialog)
+        self.input_investment_button.pack(pady=10)
 
         # 创建启动/停止提醒按钮
         self.reminder_button = ttk.Button(self.left_frame, text="启动提醒", command=self.toggle_reminder)
@@ -229,6 +237,44 @@ class InvestmentApp:
         with open(investment_file, 'w') as f:
             json.dump(history, f, indent=4)
 
+    def show_investment_input_dialog(self):
+        if not self.investment_tracker:
+            messagebox.showerror("错误", "请先登录PushPlus")
+            return
+
+        dialog = tk.Toplevel(self.master)
+        dialog.title("输入投资信息")
+
+        tk.Label(dialog, text="标的名称:").grid(row=0, column=0, padx=5, pady=5)
+        ticker_entry = ttk.Combobox(dialog, values=self.config['tickers'])
+        ticker_entry.grid(row=0, column=1, padx=5, pady=5)
+        ticker_entry.set(self.ticker_var.get())  # 默认选择当前选中的标的
+
+        tk.Label(dialog, text="股票价格:").grid(row=1, column=0, padx=5, pady=5)
+        price_entry = ttk.Entry(dialog)
+        price_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        tk.Label(dialog, text="交易数量:").grid(row=2, column=0, padx=5, pady=5)
+        shares_entry = ttk.Entry(dialog)
+        shares_entry.grid(row=2, column=1, padx=5, pady=5)
+
+        def save_investment():
+            ticker = ticker_entry.get()
+            try:
+                price = float(price_entry.get())
+                shares = int(shares_entry.get())
+            except ValueError:
+                messagebox.showerror("错误", "请输入有效的价格和数量")
+                return
+
+            amount = price * shares
+            date = self.investment_tracker.find_closest_date(ticker, price)
+            self.investment_tracker.save_investment_info(ticker, date, price, shares, amount)
+            dialog.destroy()
+            messagebox.showinfo("成功", "投资信息已保存")
+
+        ttk.Button(dialog, text="保存", command=save_investment).grid(row=3, column=0, columnspan=2, pady=10)
+
     def pushplus_login(self):
         if self.pushplus_sender is None:
             token = self.pushplus_token
@@ -241,6 +287,9 @@ class InvestmentApp:
                 )
             if token:
                 self.pushplus_sender = PushPlusSender(token)
+                self.investment_tracker = InvestmentTracker(token)
+                self.is_logged_in = True
+                self.login_button.config(text="退出登录")
 
                 # 获取当前北京时间
                 beijing_time = datetime.now(pytz.timezone('Asia/Shanghai'))
@@ -261,9 +310,15 @@ class InvestmentApp:
                     messagebox.showerror("登录失败", "PushPlus登录失败，请检查您的Token。")
                     self.pushplus_sender = None
                     self.pushplus_token = None
+                    self.is_logged_in = False
+                    self.investment_tracker = None
+                    self.login_button.config(text="PushPlus登录")
+
         else:
             self.pushplus_sender = None
             self.pushplus_token = None
+            self.is_logged_in = False
+            self.investment_tracker = None
             self.save_token(None)
             self.login_button.config(text="PushPlus登录")
             messagebox.showinfo("退出成功", "已退出PushPlus登录")
@@ -273,11 +328,17 @@ class InvestmentApp:
             self.save_token(self.pushplus_token)
         self.master.destroy()
 
+    def check_login(self):
+        if not self.is_logged_in or self.investment_tracker is None:
+            messagebox.showerror("错误", "请先登录PushPlus")
+            return False
+        return True
+
     def create_date_inputs(self):
         ttk.Label(self.left_frame, text="起始日期 (YYYY-MM):").pack(anchor=tk.W, pady=(0, 5))
         self.start_date_entry = ttk.Entry(self.left_frame, width=10)
         self.start_date_entry.pack(anchor=tk.W, pady=(0, 10))
-        self.start_date_entry.insert(0, "2022-01")
+        self.start_date_entry.insert(0, "2024-01")
 
         ttk.Label(self.left_frame, text="结束日期 (YYYY-MM):").pack(anchor=tk.W, pady=(0, 5))
         self.end_date_entry = ttk.Entry(self.left_frame, width=10)
@@ -299,6 +360,8 @@ class InvestmentApp:
         self.base_investment_entry.insert(0, str(self.config['base_investment']))
 
     def update_plot(self):
+        if not self.check_login():
+            return
         ticker = self.ticker_var.get()
         try:
             start_date = datetime.strptime(self.start_date_entry.get(), "%Y-%m").date()
@@ -551,6 +614,8 @@ class InvestmentApp:
         return equal_cumulative_returns, weighted_cumulative_returns
 
     def analyze_and_plot(self, ticker, start_date, end_date):
+        if not self.check_login():
+            return None
         # 下载数据
         data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
 
@@ -589,6 +654,10 @@ class InvestmentApp:
         # 使用更新后的 base_investment 值
         base_investment = self.config['base_investment']
 
+        # 获取实际投资回报
+        actual_returns, cumulative_investment, final_value = self.investment_tracker.get_actual_returns_series(ticker,
+                                                                                                               start_date,
+                                                                                                               end_date)
         # 模拟投资
         for d in investment_dates:
             price = data.loc[d, ticker]
@@ -629,8 +698,9 @@ class InvestmentApp:
         weighted_cumulative_returns = weighted_portfolio_values.subtract(investment_amounts.cumsum(), axis=0)
 
         # 使用更新后的 save_to_excel 函数
-        equal_returns, weighted_returns = self.save_to_excel(data, equal_investment, investment_amounts, results, ticker,
-                                                        start_date, end_date)
+        equal_returns, weighted_returns = self.save_to_excel(data, equal_investment, investment_amounts, results,
+                                                             ticker,
+                                                             start_date, end_date)
 
         # 清除旧图形
         plt.clf()
@@ -640,7 +710,9 @@ class InvestmentApp:
 
         # 绘制累计收益
         ax1.plot(equal_returns.index, equal_returns, label=f'{ticker} 等权累计收益', linestyle='--', color='orange')
-        ax1.plot(weighted_returns.index, weighted_returns, label=f'{ticker} 加权累计收益', color='blue')
+        ax1.plot(weighted_returns.index, weighted_returns, label=f'{ticker} 加权累计收益', linestyle='--', color='blue')
+        if not actual_returns.empty:
+            ax1.plot(actual_returns.index, actual_returns, label=f'{ticker} 实际投资收益', color='green')
 
         ax1.set_title(f'{ticker}: 加权累计收益 vs 等权累计收益 ({start_date.year}-{end_date.year})')
         ax1.set_ylabel('累计收益 ($)')
@@ -739,6 +811,16 @@ class InvestmentApp:
         summary += f"  累计收益: ${weighted_returns.iloc[-1]:.2f}\n"
         summary += f"  总回报率: {weighted_total_return:.2f}%\n"
         summary += f"  年化回报率: {weighted_annual_return:.2f}%\n"
+
+        if not actual_returns.empty:
+            investment_metrics = self.investment_tracker.calculate_investment_metrics(ticker, start_date, end_date)
+            if investment_metrics:
+                summary += f"实际投资:\n"
+                summary += f"  总投资: ${investment_metrics['cumulative_investment']:.2f}\n"
+                summary += f"  最终价值: ${investment_metrics['final_value']:.2f}\n"
+                summary += f"  累计收益: ${investment_metrics['actual_return']:.2f}\n"
+                summary += f"  总回报率: {investment_metrics['total_return']:.2f}%\n"
+                summary += f"  年化回报率: {investment_metrics['annual_return']:.2f}%\n"
 
         ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
