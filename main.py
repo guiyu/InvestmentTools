@@ -537,7 +537,7 @@ class InvestmentApp:
         price_change = (current_price - last_buy_price) / last_buy_price
 
         if price_change < -0.2:
-            return 2
+            return 3
         elif -0.2 <= price_change < -0.1:
             return 2
         elif -0.1 <= price_change < -0.05:
@@ -549,12 +549,14 @@ class InvestmentApp:
         elif 0.1 <= price_change < 0.2:
             return 0.5
         else:
-            return 0.5
+            return 0.3
 
     # 修改投资计算函数
     def calculate_investment(self, price, weight, base_investment):
-        max_shares = base_investment * weight // price
-        return max_shares * price, max_shares
+        investment_amount = base_investment * weight
+        shares_bought = (investment_amount / price).round(0).astype(int)
+        actual_investment = shares_bought * price
+        return actual_investment, shares_bought
 
     # 修改 save_to_excel 函数
     def save_to_excel(self, data, equal_investment, weighted_investment, shares_bought, ticker, start_date, end_date):
@@ -565,20 +567,26 @@ class InvestmentApp:
         excel_data['收盘价'] = data.loc[investment_dates, ticker].round(2)
         excel_data['等权投资金额'] = equal_investment[ticker].round(2)
         excel_data['加权投资金额'] = weighted_investment[ticker].round(2)
-        excel_data['等权买入股数'] = (equal_investment[ticker] / excel_data['收盘价']).round(0).astype(int)
-        excel_data['加权买入股数'] = shares_bought[ticker].round(0).astype(int)
+
+        # 1. 使用四舍五入计算买入股数
+        excel_data['等权买入股数'] = np.round(excel_data['等权投资金额'] / excel_data['收盘价']).astype(int)
+        excel_data['加权买入股数'] = np.round(excel_data['加权投资金额'] / excel_data['收盘价']).astype(int)
+
+        # 2. 计算实际投资金额
+        excel_data['等权实际投资金额'] = (excel_data['等权买入股数'] * excel_data['收盘价']).round(2)
+        excel_data['加权实际投资金额'] = (excel_data['加权买入股数'] * excel_data['收盘价']).round(2)
 
         # 计算累计持股数和累计投资金额
         excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum()
         excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum()
-        excel_data['等权累计投资'] = excel_data['等权投资金额'].cumsum().round(2)
-        excel_data['加权累计投资'] = excel_data['加权投资金额'].cumsum().round(2)
+        excel_data['等权累计投资'] = excel_data['等权实际投资金额'].cumsum().round(2)
+        excel_data['加权累计投资'] = excel_data['加权实际投资金额'].cumsum().round(2)
 
         # 计算累计市值
         excel_data['等权累计市值'] = (excel_data['等权累计持股数'] * excel_data['收盘价']).round(2)
         excel_data['加权累计市值'] = (excel_data['加权累计持股数'] * excel_data['收盘价']).round(2)
 
-        # 计算平均成本
+        # 3. 更新平均成本的计算
         excel_data['等权平均成本'] = (excel_data['等权累计投资'] / excel_data['等权累计持股数']).round(2)
         excel_data['加权平均成本'] = (excel_data['加权累计投资'] / excel_data['加权累计持股数']).round(2)
 
@@ -677,8 +685,9 @@ class InvestmentApp:
         equal_shares = pd.DataFrame(index=investment_dates, columns=[ticker])
         for d in investment_dates:
             price = data.loc[d, ticker]
-            equal_shares.loc[d, ticker] = base_investment // price
-            equal_investment.loc[d, ticker] = equal_shares.loc[d, ticker] * price
+            investment_amount, shares_bought = self.calculate_investment(price, 1, base_investment)
+            equal_investment.loc[d, ticker] = investment_amount
+            equal_shares.loc[d, ticker] = shares_bought
 
         # 处理可能的零值
         price_data = data.loc[valid_investment_dates, ticker]
@@ -699,8 +708,7 @@ class InvestmentApp:
 
         # 使用更新后的 save_to_excel 函数
         equal_returns, weighted_returns = self.save_to_excel(data, equal_investment, investment_amounts, results,
-                                                             ticker,
-                                                             start_date, end_date)
+                                                             ticker, start_date, end_date)
 
         # 清除旧图形
         plt.clf()
