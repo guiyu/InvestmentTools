@@ -532,26 +532,64 @@ class InvestmentApp:
 
         return investment_dates
 
-    def calculate_weight(self, current_price, last_buy_price):
-        if last_buy_price is None:
-            return 1  # 第一次投资
+    def calculate_weight(self, ticker, current_price, current_shares, equal_shares, base_investment, historical_data,
+                         total_investment, equal_weight_investment, month):
+        # 确保最低投资额
+        min_weight = 0.8
 
-        price_change = (current_price - last_buy_price) / last_buy_price
+        # 计算当前持股差异百分比
+        shares_difference = (current_shares - equal_shares) / equal_shares if equal_shares > 0 else 0
 
-        if price_change < -0.2:
-            return 3
-        elif -0.2 <= price_change < -0.1:
-            return 2
-        elif -0.1 <= price_change < -0.05:
-            return 1.5
-        elif -0.05 <= price_change < 0.05:
-            return 1
-        elif 0.05 <= price_change < 0.1:
-            return 0.7
-        elif 0.1 <= price_change < 0.2:
-            return 0.5
+        # 基础权重
+        if shares_difference < -0.1:  # 如果加权持股少于等权持股的90%
+            weight = 1.5
+        elif shares_difference > 0.1:  # 如果加权持股多于等权持股的110%
+            weight = 0.5
         else:
-            return 0.3
+            weight = 1.0
+
+        # 计算市场趋势指标
+        sma_50 = historical_data[ticker].rolling(window=50).mean().iloc[-1]
+        sma_200 = historical_data[ticker].rolling(window=200).mean().iloc[-1]
+        rsi = self.calculate_rsi(historical_data[ticker]).iloc[-1]
+
+        # 根据市场趋势调整权重
+        if current_price < sma_50 and current_price < sma_200:  # 强烈下跌趋势
+            weight *= 1.5
+        elif current_price < sma_50 or current_price < sma_200:  # 轻微下跌趋势
+            weight *= 1.2
+        elif current_price > sma_50 and current_price > sma_200:  # 上涨趋势
+            if rsi > 70:  # 可能出现超买
+                weight *= 0.8
+            else:
+                weight *= 1.0
+
+        # 控制年度总投资额
+        if month % 12 == 0:  # 每年年底
+            investment_ratio = total_investment / equal_weight_investment
+            if investment_ratio > 1.1:  # 如果总投资额超过等权投资10%
+                weight = max(0.5, weight - 0.3)  # 减少投资但保持最低投资
+            elif investment_ratio < 0.9:  # 如果总投资额低于等权投资10%
+                weight += 0.3  # 增加投资
+
+        # 考虑兑现部分收益
+        if shares_difference > 0.2 and rsi > 70:  # 如果持股显著多于等权且RSI高
+            sell_proportion = min(shares_difference - 0.1, 0.1)  # 最多卖出到比等权多10%
+            return -sell_proportion  # 返回负值表示卖出
+
+        # 确保权重在合理范围内
+        return max(min(weight, 2), min_weight)
+
+    def calculate_rsi(self, prices, period=14):
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
+    def calculate_target_value(self, initial_investment, months, annual_rate=0.12):
+        monthly_rate = (1 + annual_rate) ** (1 / 12) - 1
+        return initial_investment * (1 + monthly_rate) ** months
 
     # 修改投资计算函数
     def calculate_investment(self, price, weight, base_investment):
@@ -649,9 +687,9 @@ class InvestmentApp:
         # 计算技术指标
         data = pd.DataFrame(data)
         data.columns = [ticker]
-        data[f'{ticker}_SMA'] = data[ticker].rolling(window=self.config['sma_window']).mean()
-        data[f'{ticker}_STD'] = data[ticker].rolling(window=self.config['std_window']).std()
-        data[f'{ticker}_AVG_STD'] = data[f'{ticker}_STD'].expanding().mean()
+        data[f'{ticker}_SMA50'] = data[ticker].rolling(window=50).mean()
+        data[f'{ticker}_SMA200'] = data[ticker].rolling(window=200).mean()
+        data['RSI'] = self.calculate_rsi(data[ticker])
 
         # 计算MACD
         data[f'{ticker}_MACD'], data[f'{ticker}_MACD_SIGNAL'], _ = self.calculate_macd(
@@ -671,72 +709,71 @@ class InvestmentApp:
             raise ValueError("选定的日期范围内没有可用的投资日期")
 
         # 初始化结果DataFrame
-        results = pd.DataFrame(index=investment_dates, columns=[ticker])
-        investment_amounts = pd.DataFrame(index=investment_dates, columns=[ticker])
-        last_buy_price = None
-
-        # 使用更新后的 base_investment 值
         base_investment = self.config['base_investment']
-
-        # 获取实际投资回报
-        actual_returns, cumulative_investment, final_value = self.investment_tracker.get_actual_returns_series(ticker,
-                                                                                                               start_date,
-                                                                                                               end_date)
-        # 模拟投资
-        for d in investment_dates:
-            price = data.loc[d, ticker]
-            weight = self.calculate_weight(price, last_buy_price)
-            investment_amount, shares_bought = self.calculate_investment(price, weight, base_investment)
-
-            results.loc[d, ticker] = shares_bought
-            investment_amounts.loc[d, ticker] = investment_amount
-
-            last_buy_price = price
-
-        # 确保 investment_dates 中的日期都在 data 中存在
-        valid_investment_dates = [date for date in investment_dates if date in data.index]
-
-        # 计算等额定投策略
+        weighted_investment = pd.DataFrame(index=investment_dates, columns=[ticker])
         equal_investment = pd.DataFrame(index=investment_dates, columns=[ticker])
+        weighted_shares = pd.DataFrame(index=investment_dates, columns=[ticker])
         equal_shares = pd.DataFrame(index=investment_dates, columns=[ticker])
-        for d in investment_dates:
-            price = data.loc[d, ticker]
-            investment_amount, shares_bought = self.calculate_investment(price, 1, base_investment)
-            equal_investment.loc[d, ticker] = investment_amount
-            equal_shares.loc[d, ticker] = shares_bought
 
-        # 处理可能的零值
-        price_data = data.loc[valid_investment_dates, ticker]
-        price_data = price_data.replace(0, np.nan)  # 将零值替换为 NaN
-        equal_shares = equal_investment.divide(price_data, axis=0)
+        total_weighted_investment = 0
+        total_equal_investment = 0
+        weighted_shares_held = 0
+        equal_shares_held = 0
+
+        for i, d in enumerate(investment_dates):
+            current_data = data.loc[:d]
+            price = current_data[ticker].iloc[-1]
+
+            # 等额定投策略
+            equal_invest_amount = base_investment
+            equal_shares_bought = equal_invest_amount / price
+            equal_shares_held += equal_shares_bought
+            total_equal_investment += equal_invest_amount
+
+            # 加权定投策略
+            weight = self.calculate_weight(ticker, price, weighted_shares_held, equal_shares_held,
+                                           base_investment, current_data, total_weighted_investment,
+                                           total_equal_investment, i + 1)
+
+            if weight >= 0:  # 买入
+                weighted_invest_amount = base_investment * weight
+                weighted_shares_bought = weighted_invest_amount / price
+                weighted_shares_held += weighted_shares_bought
+                total_weighted_investment += weighted_invest_amount
+            else:  # 卖出
+                shares_to_sell = abs(weight) * weighted_shares_held
+                weighted_shares_held -= shares_to_sell
+                total_weighted_investment -= shares_to_sell * price
+                weighted_invest_amount = -shares_to_sell * price
+                weighted_shares_bought = -shares_to_sell
+
+            weighted_investment.loc[d, ticker] = weighted_invest_amount
+            equal_investment.loc[d, ticker] = equal_invest_amount
+            weighted_shares.loc[d, ticker] = weighted_shares_bought
+            equal_shares.loc[d, ticker] = equal_shares_bought
 
         # 计算累积份额和策略价值
+        weighted_cumulative_shares = weighted_shares.cumsum()
         equal_cumulative_shares = equal_shares.cumsum()
-        weighted_cumulative_shares = results.cumsum()
 
-        last_valid_date = data.index[-1]
-        equal_portfolio_value = equal_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
-        weighted_portfolio_values = weighted_cumulative_shares.multiply(data.loc[last_valid_date, ticker])
+        weighted_portfolio_values = weighted_cumulative_shares.multiply(data.loc[investment_dates, ticker], axis=0)
+        equal_portfolio_values = equal_cumulative_shares.multiply(data.loc[investment_dates, ticker], axis=0)
 
         # 计算累计收益
-        equal_cumulative_returns = equal_portfolio_value.subtract(equal_investment.cumsum(), axis=0)
-        weighted_cumulative_returns = weighted_portfolio_values.subtract(investment_amounts.cumsum(), axis=0)
+        weighted_cumulative_returns = weighted_portfolio_values.subtract(weighted_investment.cumsum(), axis=0)
+        equal_cumulative_returns = equal_portfolio_values.subtract(equal_investment.cumsum(), axis=0)
 
-        # 使用更新后的 save_to_excel 函数
-        equal_returns, weighted_returns = self.save_to_excel(data, equal_investment, investment_amounts, results,
-                                                             ticker, start_date, end_date)
+        # 保存到Excel
+        self.save_to_excel(data, equal_investment, weighted_investment, weighted_shares, ticker, start_date, end_date)
 
-        # 清除旧图形
-        plt.clf()
-        # 修改绘图部分
+        # 绘图
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
         fig.subplots_adjust(hspace=0.1)
 
-        # 绘制累计收益
-        ax1.plot(equal_returns.index, equal_returns, label=f'{ticker} 等权累计收益', linestyle='--', color='orange')
-        ax1.plot(weighted_returns.index, weighted_returns, label=f'{ticker} 加权累计收益', linestyle='--', color='blue')
-        if not actual_returns.empty:
-            ax1.plot(actual_returns.index, actual_returns, label=f'{ticker} 实际投资收益', color='green')
+        ax1.plot(equal_cumulative_returns.index, equal_cumulative_returns[ticker], label=f'{ticker} 等权累计收益',
+                 linestyle='--', color='orange')
+        ax1.plot(weighted_cumulative_returns.index, weighted_cumulative_returns[ticker], label=f'{ticker} 加权累计收益',
+                 linestyle='--', color='blue')
 
         ax1.set_title(f'{ticker}: 加权累计收益 vs 等权累计收益 ({start_date.year}-{end_date.year})')
         ax1.set_ylabel('累计收益 ($)')
@@ -746,32 +783,22 @@ class InvestmentApp:
         # 添加零线
         ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
 
-        # 确保 y 轴的范围包含所有数据点，包括负值
-        y_min = min(equal_returns.min(), weighted_returns.min())
-        y_max = max(equal_returns.max(), weighted_returns.max())
-        # 给顶部和底部一些额外的空间
+        # 确保 y 轴的范围包含所有数据点
+        y_min = min(equal_cumulative_returns[ticker].min(), weighted_cumulative_returns[ticker].min())
+        y_max = max(equal_cumulative_returns[ticker].max(), weighted_cumulative_returns[ticker].max())
         y_range = y_max - y_min
         ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
 
-        print(f"Final weighted cumulative return plotted: {weighted_cumulative_returns[ticker].iloc[-1]:.2f}")
-        print(f"Final equal cumulative return plotted: {equal_cumulative_returns[ticker].iloc[-1]:.2f}")
-
-        # 添加数据点标注
-        ax1.scatter(weighted_returns.index[-1], weighted_returns.iloc[-1], color='blue')
-        ax1.annotate(f'{weighted_returns.iloc[-1]:.2f}',
-                     (weighted_returns.index[-1], weighted_returns.iloc[-1]),
+        # 添加终点标注
+        ax1.scatter(weighted_cumulative_returns.index[-1], weighted_cumulative_returns[ticker].iloc[-1], color='blue')
+        ax1.annotate(f'{weighted_cumulative_returns[ticker].iloc[-1]:.2f}',
+                     (weighted_cumulative_returns.index[-1], weighted_cumulative_returns[ticker].iloc[-1]),
                      textcoords="offset points", xytext=(0, 10), ha='center')
 
-        ax1.scatter(equal_returns.index[-1], equal_returns.iloc[-1], color='orange')
-        ax1.annotate(f'{equal_returns.iloc[-1]:.2f}',
-                     (equal_returns.index[-1], equal_returns.iloc[-1]),
+        ax1.scatter(equal_cumulative_returns.index[-1], equal_cumulative_returns[ticker].iloc[-1], color='orange')
+        ax1.annotate(f'{equal_cumulative_returns[ticker].iloc[-1]:.2f}',
+                     (equal_cumulative_returns.index[-1], equal_cumulative_returns[ticker].iloc[-1]),
                      textcoords="offset points", xytext=(0, 10), ha='center')
-
-        # 获取图表中的实际值
-        weighted_line = ax1.get_lines()[0]
-        equal_line = ax1.get_lines()[1]
-        print(f"Final weighted cumulative return on chart: {weighted_line.get_ydata()[-1]:.2f}")
-        print(f"Final equal cumulative return on chart: {equal_line.get_ydata()[-1]:.2f}")
 
         # 绘制MACD
         ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
@@ -803,48 +830,35 @@ class InvestmentApp:
 
         # 更新摘要统计
         total_equal_investment = equal_investment[ticker].sum()
-        total_weighted_investment = investment_amounts[ticker].sum()
+        total_weighted_investment = weighted_investment[ticker].sum()
 
-        equal_final_value = total_equal_investment + equal_returns.iloc[-1]
-        weighted_final_value = total_weighted_investment + weighted_returns.iloc[-1]
+        equal_final_value = equal_portfolio_values[ticker].iloc[-1]
+        weighted_final_value = weighted_portfolio_values[ticker].iloc[-1]
 
         equal_total_return = (equal_final_value / total_equal_investment - 1) * 100
         weighted_total_return = (weighted_final_value / total_weighted_investment - 1) * 100
 
-        # 计算实际的投资日期范围
-        actual_start_date = equal_returns.index[0]
-        actual_end_date = equal_returns.index[-1]
-        investment_period_days = (actual_end_date - actual_start_date).days
+        investment_period_days = (end_date - start_date).days
 
         equal_annual_return = ((equal_final_value / total_equal_investment) ** (
-                365.25 / investment_period_days) - 1) * 100
+                    365.25 / investment_period_days) - 1) * 100
         weighted_annual_return = ((weighted_final_value / total_weighted_investment) ** (
-                365.25 / investment_period_days) - 1) * 100
+                    365.25 / investment_period_days) - 1) * 100
 
         # 更新摘要统计文本
         summary = f"\n{ticker} 的摘要统计：\n"
         summary += f"等额定投:\n"
         summary += f"  总投资: ${total_equal_investment:.2f}\n"
         summary += f"  最终价值: ${equal_final_value:.2f}\n"
-        summary += f"  累计收益: ${equal_returns.iloc[-1]:.2f}\n"
+        summary += f"  累计收益: ${equal_cumulative_returns[ticker].iloc[-1]:.2f}\n"
         summary += f"  总回报率: {equal_total_return:.2f}%\n"
         summary += f"  年化回报率: {equal_annual_return:.2f}%\n"
         summary += f"加权定投:\n"
         summary += f"  总投资: ${total_weighted_investment:.2f}\n"
         summary += f"  最终价值: ${weighted_final_value:.2f}\n"
-        summary += f"  累计收益: ${weighted_returns.iloc[-1]:.2f}\n"
+        summary += f"  累计收益: ${weighted_cumulative_returns[ticker].iloc[-1]:.2f}\n"
         summary += f"  总回报率: {weighted_total_return:.2f}%\n"
         summary += f"  年化回报率: {weighted_annual_return:.2f}%\n"
-
-        if not actual_returns.empty:
-            investment_metrics = self.investment_tracker.calculate_investment_metrics(ticker, start_date, end_date)
-            if investment_metrics:
-                summary += f"实际投资:\n"
-                summary += f"  总投资: ${investment_metrics['cumulative_investment']:.2f}\n"
-                summary += f"  最终价值: ${investment_metrics['final_value']:.2f}\n"
-                summary += f"  累计收益: ${investment_metrics['actual_return']:.2f}\n"
-                summary += f"  总回报率: {investment_metrics['total_return']:.2f}%\n"
-                summary += f"  年化回报率: {investment_metrics['annual_return']:.2f}%\n"
 
         ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
