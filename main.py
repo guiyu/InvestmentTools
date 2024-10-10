@@ -17,6 +17,8 @@ import pytz
 from datetime import datetime, time
 from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
 from investment_tracker import InvestmentTracker
+import requests
+import time
 
 
 class InvestmentApp:
@@ -621,9 +623,23 @@ class InvestmentApp:
         # 返回累计收益数值
         return equal_cumulative_returns, weighted_cumulative_returns
 
+    def check_internet_connection(self):
+        try:
+            # 尝试连接到 Yahoo Finance 的网站
+            response = requests.get("https://finance.yahoo.com", timeout=5)
+            return response.status_code == 200
+        except requests.ConnectionError:
+            return False
+
     def analyze_and_plot(self, ticker, start_date, end_date):
         if not self.check_login():
             return None
+
+        # 检查网络连接
+        if not self.check_internet_connection():
+            messagebox.showerror("网络错误", "无法连接到互联网。请检查您的网络连接后重试。")
+            return None
+
         # 下载数据
         data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
 
