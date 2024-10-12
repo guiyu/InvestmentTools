@@ -33,7 +33,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --name=InvestmentApp --onefile --windowed main.py
+        pyinstaller --name=InvestmentApp --onefile main.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v2
@@ -69,6 +69,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./InvestmentApp-${{ runner.os }}/InvestmentApp
-        asset_name: InvestmentApp-${{ runner.os }}
+        asset_path: ./InvestmentApp-${{ runner.os }}/InvestmentApp${{ runner.os == 'Windows' && '.exe' || '' }}
+        asset_name: InvestmentApp-${{ runner.os }}${{ runner.os == 'Windows' && '.exe' || '' }}
         asset_content_type: application/octet-stream

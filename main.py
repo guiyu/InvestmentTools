@@ -1,9 +1,9 @@
+import argparse
 import json
 import os
 import yfinance as yf
 import numpy as np
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta, date
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
@@ -11,58 +11,33 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import pandas as pd
 import schedule as schedule_lib
-import time
 import threading
 import pytz
-from datetime import datetime, time
 from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
 from investment_tracker import InvestmentTracker
 import requests
 import time
+from datetime import datetime, timedelta, date, time
+
 
 
 class InvestmentApp:
-    def __init__(self, master):
+    def __init__(self, master=None):
         self.master = master
-        self.master.title("投资策略分析")
-        self.master.geometry("1024x768")
         self.token_file = 'pushplus_token.json'
         self.pushplus_token = self.load_token()
+        self.pushplus_sender = None
         self.investment_tracker = None
-        self.is_logged_in = False
+        self.is_logged_in = False  # 确保初始化时设置为 False
 
-
-        # Vanguard Dividend Appreciation ETF (VIG)
-        # 特点：VIG专注于持有持续增加股息的大型公司。具有高质量、低波动的特性，在熊市中往往表现较好，因为这些公司通常具有较强的盈利能力和稳健的现金流。
-        # 防御性：持有的公司在市场动荡时表现相对较稳定，特别是在经济下滑时能依赖于稳健的股息支撑。
-        # 牛市表现：虽然不像科技类ETF那样快速增长，但依靠其稳定的资产配置，也能在牛市中获得稳健回报。
-
-        # iShares Edge MSCI Minimum Volatility USA ETF (USMV)
-        # 特点：USMV通过投资于波动性较小的股票来降低投资组合的整体波动率。它的目标是提供类似标普500的市场回报，但波动率更低，在熊市中回撤较小。
-        # 防御性：由于其策略侧重于低波动性资产，USMV在熊市中往往比市场整体表现更好，减少了大幅回撤的风险。
-        # 牛市表现：尽管增长速度可能不如高风险ETF，但它可以在市场上涨时保持温和的上行潜力，适合追求稳定收益的长期投资者。
-
-        # Invesco S&P 500 Low Volatility ETF (SPLV)
-        # 特点：SPLV专注于持有标普500指数中波动性最低的100只股票。与USMV类似，它旨在降低市场波动，并减少熊市中的下行风险。
-        # 防御性：低波动性的股票在市场大幅下挫时通常表现较为抗跌，尤其是在经济衰退期和市场不确定性增加时。
-        # 牛市表现：虽然牛市中的涨幅可能不会像高增长类股票那样显著，但凭借稳健的持仓，SPLV依然能提供有竞争力的回报。
-
-        # iShares Select Dividend ETF (DVY)
-        # 特点：DVY投资于美国市场中股息收益率较高的股票，持仓集中在金融、公共事业和能源等板块。高股息股票通常表现相对稳健。
-        # 防御性：高股息股票通常具备稳定的现金流和稳健的资产负债表，在市场下跌时，股息收益可以起到一定的缓冲作用。
-        # 牛市表现：虽然高股息股票的增长潜力不如科技类股，但它们仍能够在经济复苏时取得稳定增长，同时股息收益进一步提高整体回报。
-
-        #  Vanguard Consumer Staples ETF (VDC)
-        # 特点：VDC专注于消费必需品行业，包括食品、饮料和家庭用品等领域。这类公司由于提供日常生活必需品，在经济波动时需求保持稳定。
-        # 防御性：消费必需品行业在熊市中表现相对抗跌，因为无论经济状况如何，消费者仍需购买这些产品。
-        # 牛市表现：虽然消费必需品行业的增长速度较为稳定，但它可以在牛市中依然提供持续的回报，并且通过稳健的股息政策进一步增强收益。
-
-        # SPLG 标普500 ETF
+        # 设置中文字体
+        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
+        plt.rcParams['axes.unicode_minus'] = False
 
         # 配置
         self.config = {
             'tickers': ['SPY', 'QQQ', 'XLG', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'KWEB'],
-            'base_investment': 2000,
+            'base_investment': 3000,
             'sma_window': 200,
             'std_window': 30,
             'min_weight': 0.5,
@@ -72,14 +47,46 @@ class InvestmentApp:
             'macd_signal_window': 9,
         }
 
-        # 设置中文字体
-        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
-        plt.rcParams['axes.unicode_minus'] = False
-
         self.pushplus_sender = None
         self.reminder_thread = None
         self.bot = None
-        self.reminder_thread = None
+
+        # GUI 相关的属性初始化为 None
+        self.left_frame = None
+        self.right_frame = None
+        self.start_date_entry = None
+        self.end_date_entry = None
+        self.ticker_var = None
+        self.ticker_dropdown = None
+        self.base_investment_entry = None
+        self.update_button = None
+        self.estimate_button = None
+        self.login_button = None
+        self.input_investment_button = None
+        self.reminder_button = None
+        self.fig = None
+        self.ax1 = None
+        self.ax2 = None
+        self.canvas = None
+        self.canvas_widget = None
+
+        # 只在 GUI 模式下初始化窗口和组件
+        if self.master is not None:
+            self.init_gui()
+
+            # 在 GUI 初始化之后尝试自动登录
+        if self.pushplus_token:
+            self.auto_login()
+
+    def auto_login(self):
+        if self.pushplus_login(self.pushplus_token):
+            print("已使用保存的 token 自动登录")
+        else:
+            print("自动登录失败，请手动登录")
+
+    def init_gui(self):
+        self.master.title("投资策略分析")
+        self.master.geometry("1024x768")
         self.create_widgets()
 
     def load_token(self):
@@ -94,6 +101,9 @@ class InvestmentApp:
             json.dump({'token': token}, f)
 
     def create_widgets(self):
+
+        if self.master is None:
+            return
         # 创建左侧框架
         self.left_frame = ttk.Frame(self.master, padding="10")
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, expand=False)
@@ -115,7 +125,7 @@ class InvestmentApp:
         self.estimate_button = ttk.Button(self.left_frame, text="当天定投估值", command=self.estimate_today_investment)
         self.estimate_button.pack(pady=10)
 
-        # 创建微信登录按钮
+        # 创建登录按钮
         self.login_button = ttk.Button(self.left_frame, text="PushPlus登录", command=self.pushplus_login)
         self.login_button.pack(pady=10)
 
@@ -147,19 +157,30 @@ class InvestmentApp:
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
 
     def estimate_today_investment(self):
-        ticker = self.ticker_var.get()
-        beijing_tz = pytz.timezone('Asia/Shanghai')
-        now = datetime.now(beijing_tz)
-
-        # 获取股票数据
-        stock = yf.Ticker(ticker)
-
-        # 检查是否在交易时间
-        trading_start = time(9, 30)
-        trading_end = time(16, 0)
-        current_time = now.time()
+        if not self.is_logged_in:
+            return "请先登录PushPlus"
 
         try:
+            # 在 CLI 模式下使用默认 ticker
+            if hasattr(self, 'ticker_var') and self.ticker_var:
+                ticker = self.ticker_var.get()
+            else:
+                ticker = self.config['tickers'][0]  # 使用配置中的第一个 ticker 作为默认值
+
+            if not isinstance(ticker, str):
+                raise TypeError(f"股票标识符必须是字符串，而不是 {type(ticker)}")
+
+            beijing_tz = pytz.timezone('Asia/Shanghai')
+            now = datetime.now(beijing_tz)
+
+            # 获取股票数据
+            stock = yf.Ticker(ticker)
+
+            # 检查是否在交易时间
+            trading_start = time(9, 30)
+            trading_end = time(16, 0)
+            current_time = now.time()
+
             if trading_start <= current_time <= trading_end and now.weekday() < 5:
                 # 交易时间，尝试获取当前价格
                 try:
@@ -179,10 +200,25 @@ class InvestmentApp:
                     raise ValueError("无法获取历史数据")
                 current_price = hist['Close'].iloc[-1]
 
+            # 确保 current_price 是浮点数
+            if not isinstance(current_price, (int, float)):
+                raise TypeError(f"当前价格必须是数字，而不是 {type(current_price)}")
+            current_price = float(current_price)
+
             # 计算建议购买的股票数和投资金额
-            weight = self.calculate_weight(current_price, None)  # 假设这是首次购买
+            weight = self.calculate_weight(current_price)
             investment_amount, shares_to_buy = self.calculate_investment(current_price, weight,
                                                                          self.config['base_investment'])
+
+            # 确保计算结果是正确的类型
+            if not isinstance(investment_amount, (int, float)):
+                raise TypeError(f"投资金额必须是数字，而不是 {type(investment_amount)}")
+            if not isinstance(shares_to_buy, int):
+                raise TypeError(f"购买股数必须是整数，而不是 {type(shares_to_buy)}")
+
+            investment_amount = float(investment_amount)
+            shares_to_buy = int(shares_to_buy)
+
             # 计算下一次定投时间
             next_investment_date = self.get_next_investment_date(now)
 
@@ -198,15 +234,22 @@ class InvestmentApp:
             )
 
             # 在GUI中显示消息
-            messagebox.showinfo("今日定投估值", message)
+            if self.master:
+                messagebox.showinfo("今日定投估值", message)
+            else:
+                print("今日定投估值", message)
 
             # 保存投资信息
             self.save_investment_info(ticker, now, current_price, shares_to_buy, investment_amount)
 
+            return message
+
         except Exception as e:
             error_message = f"估值过程中出现错误: {str(e)}"
-            messagebox.showerror("错误", error_message)
-            print(error_message)  # 打印错误信息到控制台以便调试
+            print(f"详细错误信息: {error_message}")
+            print(f"错误类型: {type(e)}")
+            print(f"错误发生位置: {e.__traceback__.tb_frame.f_code.co_filename}, 行 {e.__traceback__.tb_lineno}")
+            return error_message
 
     def get_next_investment_date(self, current_date):
         next_date = current_date.replace(day=1) + timedelta(days=32)
@@ -229,9 +272,9 @@ class InvestmentApp:
         investment_info = {
             'date': date.strftime('%Y-%m-%d %H:%M:%S'),
             'ticker': ticker,
-            'price': price,
-            'shares': shares,
-            'amount': amount
+            'price': float(price),  # 确保是 Python float
+            'shares': int(shares),  # 确保是 Python int
+            'amount': float(amount)  # 确保是 Python float
         }
         history.append(investment_info)
 
@@ -277,53 +320,56 @@ class InvestmentApp:
 
         ttk.Button(dialog, text="保存", command=save_investment).grid(row=3, column=0, columnspan=2, pady=10)
 
-    def pushplus_login(self):
-        if self.pushplus_sender is None:
-            token = self.pushplus_token
-            if not token:
+    def pushplus_login(self, cli_token=None):
+        token = cli_token or self.pushplus_token
+        if not token:
+            if self.master:
                 token = tk.simpledialog.askstring(
                     "PushPlus Token",
                     "请输入您的PushPlus Token:\n\n"
                     "如果您还没有 Token，请访问 https://www.pushplus.plus/ 获取。\n"
                     "在该网站注册并登录后，您可以在个人中心找到您的 Token。"
                 )
-            if token:
-                self.pushplus_sender = PushPlusSender(token)
-                self.investment_tracker = InvestmentTracker(token)
-                self.is_logged_in = True
-                self.login_button.config(text="退出登录")
+            else:
+                print("Error: No token provided for CLI mode")
+                return False
 
-                # 获取当前北京时间
-                beijing_time = datetime.now(pytz.timezone('Asia/Shanghai'))
-                time_str = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+        if token:
+            self.pushplus_sender = PushPlusSender(token)
+            self.investment_tracker = InvestmentTracker(token)
 
-                # 发送包含时间戳的测试消息
-                test_result = self.pushplus_sender.send_message(
-                    "登录测试",
-                    f"PushPlus登录成功\n\n时间：{time_str} (北京时间)"
-                )
+            # 获取当前北京时间
+            beijing_time = datetime.now(pytz.timezone('Asia/Shanghai'))
+            time_str = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
 
-                if test_result:
-                    messagebox.showinfo("登录成功", f"PushPlus登录成功！\n\n测试消息发送时间：{time_str}")
+            # 发送包含时间戳的测试消息
+            test_result = self.pushplus_sender.send_message(
+                "登录测试",
+                f"PushPlus登录成功\n\n时间：{time_str} (北京时间)"
+            )
+
+            if test_result:
+                self.pushplus_token = token
+                self.is_logged_in = True  # 确保设置登录状态
+                self.save_token(token)
+                if self.master:
                     self.login_button.config(text="退出登录")
-                    self.pushplus_token = token
-                    self.save_token(token)
+                    messagebox.showinfo("登录成功", f"PushPlus登录成功！\n\n测试消息发送时间：{time_str}")
                 else:
-                    messagebox.showerror("登录失败", "PushPlus登录失败，请检查您的Token。")
-                    self.pushplus_sender = None
-                    self.pushplus_token = None
-                    self.is_logged_in = False
-                    self.investment_tracker = None
+                    print(f"PushPlus登录成功！\n测试消息发送时间：{time_str}")
+                return True
+            else:
+                self.pushplus_sender = None
+                self.pushplus_token = None
+                self.is_logged_in = False
+                self.investment_tracker = None
+                if self.master:
                     self.login_button.config(text="PushPlus登录")
-
-        else:
-            self.pushplus_sender = None
-            self.pushplus_token = None
-            self.is_logged_in = False
-            self.investment_tracker = None
-            self.save_token(None)
-            self.login_button.config(text="PushPlus登录")
-            messagebox.showinfo("退出成功", "已退出PushPlus登录")
+                    messagebox.showerror("登录失败", "PushPlus登录失败，请检查您的Token。")
+                else:
+                    print("PushPlus登录失败，请检查您的Token。")
+                return False
+        return False
 
     def destroy(self):
         if self.pushplus_token:
@@ -398,10 +444,13 @@ class InvestmentApp:
             self.canvas_widget.pack(fill=tk.BOTH, expand=True)
             self.canvas.draw()
 
-            print("图形已更新")  # 添加这行来确认方法执行到此处
+            print("图形已更新")
         except Exception as e:
             messagebox.showerror("错误", f"分析过程中出现错误: {str(e)}")
-            print(f"错误详情: {str(e)}")  # 添加这行来打印详细错误信息
+            print(f"错误详情: {str(e)}")
+            # 添加更详细的错误信息打印
+            import traceback
+            traceback.print_exc()
 
     # def wechat_login(self):
     #     if self.bot is None:
@@ -441,15 +490,28 @@ class InvestmentApp:
             self.stop_reminder()
 
     def start_reminder(self):
-        if self.pushplus_sender is None:
-            messagebox.showerror("错误", "请先登录PushPlus")
-            return
+        if not self.is_logged_in:
+            if self.master:
+                messagebox.showerror("错误", "请先登录PushPlus")
+            else:
+                print("错误: 请先登录PushPlus")
+            return False
 
-        self.reminder_thread = threading.Thread(target=self.run_reminder, daemon=True)
-        self.reminder_thread.start()
-        self.reminder_button.config(text="停止提醒")
-        messagebox.showinfo("提醒已启动", "定投提醒功能已启动")
-
+        if self.reminder_thread is None:
+            self.reminder_thread = threading.Thread(target=self.run_reminder, daemon=True)
+            self.reminder_thread.start()
+            if self.master:
+                self.reminder_button.config(text="停止提醒")
+                messagebox.showinfo("提醒已启动", "定投提醒功能已启动")
+            else:
+                print("定投提醒功能已启动")
+            return True
+        else:
+            if self.master:
+                messagebox.showinfo("提醒已启动", "定投提醒功能已经在运行中")
+            else:
+                print("定投提醒功能已经在运行中")
+            return False
     def run_reminder(self):
         schedule_lib.every().day.at("08:00").do(self.send_investment_reminder)
         while self.reminder_thread:
@@ -532,12 +594,17 @@ class InvestmentApp:
 
         return investment_dates
 
-    def calculate_weight(self, ticker, current_price, current_shares, equal_shares, base_investment, historical_data,
-                         total_investment, equal_weight_investment, month):
+    def calculate_weight(self, current_price, sma=None, current_shares=0, equal_shares=0, base_investment=None,
+                         historical_data=None, total_investment=0, equal_weight_investment=0, month=1):
+        # 使用配置中的值或提供的值
+        base_investment = float(base_investment or self.config['base_investment'])
+
         # 确保最低投资额
         min_weight = 0.8
 
         # 计算当前持股差异百分比
+        current_shares = float(current_shares)
+        equal_shares = float(equal_shares)
         shares_difference = (current_shares - equal_shares) / equal_shares if equal_shares > 0 else 0
 
         # 基础权重
@@ -548,32 +615,38 @@ class InvestmentApp:
         else:
             weight = 1.0
 
-        # 计算市场趋势指标
-        sma_50 = historical_data[ticker].rolling(window=50).mean().iloc[-1]
-        sma_200 = historical_data[ticker].rolling(window=200).mean().iloc[-1]
-        rsi = self.calculate_rsi(historical_data[ticker]).iloc[-1]
+        # 如果没有提供历史数据，我们就不进行市场趋势调整
+        if historical_data is not None:
+            # 计算市场趋势指标
+            sma_50 = historical_data.rolling(window=50).mean().iloc[-1]
+            sma_200 = historical_data.rolling(window=200).mean().iloc[-1]
+            rsi = self.calculate_rsi(historical_data).iloc[-1]
 
-        # 根据市场趋势调整权重
-        if current_price < sma_50 and current_price < sma_200:  # 强烈下跌趋势
-            weight *= 1.5
-        elif current_price < sma_50 or current_price < sma_200:  # 轻微下跌趋势
-            weight *= 1.2
-        elif current_price > sma_50 and current_price > sma_200:  # 上涨趋势
-            if rsi > 70:  # 可能出现超买
-                weight *= 0.8
-            else:
-                weight *= 1.0
+            # 根据市场趋势调整权重
+            if current_price < sma_50 and current_price < sma_200:  # 强烈下跌趋势
+                weight *= 1.5
+            elif current_price < sma_50 or current_price < sma_200:  # 轻微下跌趋势
+                weight *= 1.2
+            elif current_price > sma_50 and current_price > sma_200:  # 上涨趋势
+                if rsi > 70:  # 可能出现超买
+                    weight *= 0.8
+                else:
+                    weight *= 1.0
 
         # 控制年度总投资额
+        month = int(month)
         if month % 12 == 0:  # 每年年底
-            investment_ratio = total_investment / equal_weight_investment
+            total_investment = float(total_investment)
+            equal_weight_investment = float(equal_weight_investment)
+            investment_ratio = total_investment / equal_weight_investment if equal_weight_investment > 0 else 1
             if investment_ratio > 1.1:  # 如果总投资额超过等权投资10%
                 weight = max(0.5, weight - 0.3)  # 减少投资但保持最低投资
             elif investment_ratio < 0.9:  # 如果总投资额低于等权投资10%
                 weight += 0.3  # 增加投资
 
         # 考虑兑现部分收益
-        if shares_difference > 0.2 and rsi > 70:  # 如果持股显著多于等权且RSI高
+        if shares_difference > 0.2 and historical_data is not None and self.calculate_rsi(historical_data).iloc[
+            -1] > 70:  # 如果持股显著多于等权且RSI高
             sell_proportion = min(shares_difference - 0.1, 0.1)  # 最多卖出到比等权多10%
             return -sell_proportion  # 返回负值表示卖出
 
@@ -593,9 +666,9 @@ class InvestmentApp:
 
     # 修改投资计算函数
     def calculate_investment(self, price, weight, base_investment):
-        investment_amount = base_investment * weight
-        shares_bought = (investment_amount / price).round(0).astype(int)
-        actual_investment = shares_bought * price
+        investment_amount = float(base_investment * weight)
+        shares_bought = int(investment_amount / price)  # 向下取整
+        actual_investment = float(shares_bought * price)
         return actual_investment, shares_bought
 
     # 修改 save_to_excel 函数
@@ -731,21 +804,18 @@ class InvestmentApp:
             total_equal_investment += equal_invest_amount
 
             # 加权定投策略
-            weight = self.calculate_weight(ticker, price, weighted_shares_held, equal_shares_held,
-                                           base_investment, current_data, total_weighted_investment,
-                                           total_equal_investment, i + 1)
+            weight = self.calculate_weight(price,
+                                           current_data[ticker].rolling(window=self.config['sma_window']).mean().iloc[
+                                               -1],
+                                           current_data[ticker].rolling(window=self.config['std_window']).std().iloc[
+                                               -1],
+                                           current_data[ticker].rolling(
+                                               window=self.config['std_window']).std().expanding().mean().iloc[-1])
 
-            if weight >= 0:  # 买入
-                weighted_invest_amount = base_investment * weight
-                weighted_shares_bought = weighted_invest_amount / price
-                weighted_shares_held += weighted_shares_bought
-                total_weighted_investment += weighted_invest_amount
-            else:  # 卖出
-                shares_to_sell = abs(weight) * weighted_shares_held
-                weighted_shares_held -= shares_to_sell
-                total_weighted_investment -= shares_to_sell * price
-                weighted_invest_amount = -shares_to_sell * price
-                weighted_shares_bought = -shares_to_sell
+            weighted_invest_amount = base_investment * weight
+            weighted_shares_bought = weighted_invest_amount / price
+            weighted_shares_held += weighted_shares_bought
+            total_weighted_investment += weighted_invest_amount
 
             weighted_investment.loc[d, ticker] = weighted_invest_amount
             equal_investment.loc[d, ticker] = equal_invest_amount
@@ -868,8 +938,52 @@ class InvestmentApp:
         return fig
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Investment App")
+    parser.add_argument("--cli", action="store_true", help="Run in CLI mode")
+    parser.add_argument("--login", help="Login to PushPlus with token", metavar="TOKEN")
+    parser.add_argument("--estimate", action="store_true", help="Estimate today's investment")
+    parser.add_argument("--start-reminder", action="store_true", help="Start investment reminder")
+    return parser.parse_args()
+
+
+def run_cli(app, args):
+    if args.login:
+        if app.pushplus_login(args.login):
+            print("PushPlus登录成功")
+        else:
+            print("PushPlus登录失败")
+
+    # 如果没有显式登录，尝试使用保存的 token 自动登录
+    if not app.is_logged_in:
+        app.auto_login()
+
+    if args.estimate:
+        if app.is_logged_in:
+            result = app.estimate_today_investment()
+            print(result)
+        else:
+            print("错误: 请先登录PushPlus")
+
+    if args.start_reminder:
+        if app.is_logged_in:
+            result = app.start_reminder()
+            if result:
+                print("定投提醒功能已启动")
+            else:
+                print("定投提醒功能启动失败或已在运行中")
+        else:
+            print("错误: 请先登录PushPlus")
+
+
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = InvestmentApp(root)
-    root.protocol("WM_DELETE_WINDOW", app.destroy)
-    root.mainloop()
+    args = parse_arguments()
+
+    if args.cli:
+        app = InvestmentApp(None)  # 初始化无 GUI 的 InvestmentApp
+        run_cli(app, args)
+    else:
+        root = tk.Tk()
+        app = InvestmentApp(root)
+        root.protocol("WM_DELETE_WINDOW", app.destroy)
+        root.mainloop()
