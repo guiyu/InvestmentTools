@@ -47,7 +47,7 @@ class InvestmentApp:
         # 配置
         self.config = {
             'tickers': ['SPY', 'QQQ', 'XLG', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'KWEB'],
-            'base_investment': 3000,
+            'base_investment': 4000,
             'sma_window': 200,
             'std_window': 30,
             'min_weight': 0.5,
@@ -494,7 +494,7 @@ class InvestmentApp:
         print("Reminder scheduled for 08:00 every day")
         while not self.stop_flag.is_set():
             schedule.run_pending()
-            time.sleep(1)  # 使用 time.sleep()
+            time.sleep(60 * 1000 * 1000)  # 使用 time.sleep()
         print("Reminder thread stopped")
 
     def stop_reminder(self):
