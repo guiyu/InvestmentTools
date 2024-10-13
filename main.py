@@ -10,15 +10,25 @@ from tkinter import messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 import pandas as pd
-import schedule as schedule_lib
 import threading
 import pytz
-from pushplus_sender import PushPlusSender  # 导入新的 PushPlusSender 类
+from pushplus_sender import PushPlusSender
 from investment_tracker import InvestmentTracker
 import requests
 import time
-from datetime import datetime, timedelta, date, time
+from datetime import datetime, timedelta, date, time as datetime_time
+import schedule
 
+# 在文件顶部添加这个打印语句，以确认导入成功
+print("All modules imported successfully, including time module")
+
+
+def test_schedule():
+    print("Schedule test function executed at", datetime.now())
+
+
+# 测试 schedule 的基本功能
+schedule.every(5).seconds.do(test_schedule)
 
 
 class InvestmentApp:
@@ -49,6 +59,7 @@ class InvestmentApp:
 
         self.pushplus_sender = None
         self.reminder_thread = None
+        self.stop_flag = threading.Event()
         self.bot = None
 
         # GUI 相关的属性初始化为 None
@@ -130,7 +141,8 @@ class InvestmentApp:
         self.login_button.pack(pady=10)
 
         # 添加"输入投资信息"按钮
-        self.input_investment_button = ttk.Button(self.left_frame, text="输入投资信息", command=self.show_investment_input_dialog)
+        self.input_investment_button = ttk.Button(self.left_frame, text="输入投资信息",
+                                                  command=self.show_investment_input_dialog)
         self.input_investment_button.pack(pady=10)
 
         # 创建启动/停止提醒按钮
@@ -177,8 +189,8 @@ class InvestmentApp:
             stock = yf.Ticker(ticker)
 
             # 检查是否在交易时间
-            trading_start = time(9, 30)
-            trading_end = time(16, 0)
+            trading_start = datetime_time(9, 30)
+            trading_end = datetime_time(16, 0)
             current_time = now.time()
 
             if trading_start <= current_time <= trading_end and now.weekday() < 5:
@@ -452,39 +464,8 @@ class InvestmentApp:
             import traceback
             traceback.print_exc()
 
-    # def wechat_login(self):
-    #     if self.bot is None:
-    #         try:
-    #             self.bot = Bot(cache_path=True)
-    #             qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    #             qr.add_data(self.bot.uuid)
-    #             qr.make(fit=True)
-    #             img = qr.make_image(fill_color="black", back_color="white")
-    #
-    #             # 将二维码图片显示在GUI上
-    #             buffer = io.BytesIO()
-    #             img.save(buffer, format="PNG")
-    #             image = Image.open(buffer)
-    #             photo = ImageTk.PhotoImage(image)
-    #
-    #             qr_window = tk.Toplevel(self.master)
-    #             qr_window.title("微信登录")
-    #             qr_label = ttk.Label(qr_window, image=photo)
-    #             qr_label.image = photo
-    #             qr_label.pack()
-    #
-    #             messagebox.showinfo("登录成功", "微信登录成功！")
-    #             self.login_button.config(text="退出登录")
-    #         except Exception as e:
-    #             messagebox.showerror("登录失败", f"微信登录失败: {str(e)}")
-    #     else:
-    #         self.bot.logout()
-    #         self.bot = None
-    #         self.login_button.config(text="微信登录")
-    #         messagebox.showinfo("退出成功", "已退出微信登录")
-
     def toggle_reminder(self):
-        if self.reminder_thread is None:
+        if self.reminder_thread is None or not self.reminder_thread.is_alive():
             self.start_reminder()
         else:
             self.stop_reminder()
@@ -497,56 +478,73 @@ class InvestmentApp:
                 print("错误: 请先登录PushPlus")
             return False
 
-        if self.reminder_thread is None:
-            self.reminder_thread = threading.Thread(target=self.run_reminder, daemon=True)
-            self.reminder_thread.start()
-            if self.master:
-                self.reminder_button.config(text="停止提醒")
-                messagebox.showinfo("提醒已启动", "定投提醒功能已启动")
-            else:
-                print("定投提醒功能已启动")
-            return True
+        self.stop_flag.clear()
+        self.reminder_thread = threading.Thread(target=self.run_reminder, daemon=True)
+        self.reminder_thread.start()
+        if self.master:
+            self.reminder_button.config(text="停止提醒")
+            messagebox.showinfo("提醒已启动", "定投提醒功能已启动")
         else:
-            if self.master:
-                messagebox.showinfo("提醒已启动", "定投提醒功能已经在运行中")
-            else:
-                print("定投提醒功能已经在运行中")
-            return False
+            print("定投提醒功能已启动")
+        return True
+
     def run_reminder(self):
-        schedule_lib.every().day.at("08:00").do(self.send_investment_reminder)
-        while self.reminder_thread:
-            schedule_lib.run_pending()
-            time.sleep(60)
+        schedule.clear()  # 清除之前的所有任务
+        schedule.every().day.at("08:00").do(self.send_investment_reminder)
+        print("Reminder scheduled for 08:00 every day")
+        while not self.stop_flag.is_set():
+            schedule.run_pending()
+            time.sleep(1)  # 使用 time.sleep()
+        print("Reminder thread stopped")
 
     def stop_reminder(self):
-        if self.reminder_thread:
-            schedule_lib.clear()
-            self.reminder_thread = None
+        if self.reminder_thread and self.reminder_thread.is_alive():
+            self.stop_flag.set()
+            self.reminder_thread.join()
+        self.reminder_thread = None
+        if self.master:
             self.reminder_button.config(text="启动提醒")
             messagebox.showinfo("提醒已停止", "定投提醒功能已停止")
+        else:
+            print("定投提醒功能已停止")
 
     def send_investment_reminder(self):
         if self.pushplus_sender is None:
             print("PushPlus未登录，无法发送提醒")
             return
 
-        today = datetime.now().date()
-        if self.get_second_wednesday(today) == today:
+        beijing_tz = pytz.timezone('Asia/Shanghai')
+        now = datetime.now(beijing_tz)
+
+        if self.get_second_wednesday(now.date()) == now.date():
             for ticker in self.config['tickers']:
-                data = yf.download(ticker, start=today - timedelta(days=365), end=today)['Adj Close']
-                if not data.empty:
-                    current_price = data.iloc[-1]
-                    weight = self.calculate_weight(current_price, data.iloc[-2] if len(data) > 1 else None)
+                try:
+                    stock = yf.Ticker(ticker)
+                    current_price = stock.info['regularMarketPrice']
+
+                    weight = self.calculate_weight(current_price)
                     investment_amount, shares_to_buy = self.calculate_investment(current_price, weight,
                                                                                  self.config['base_investment'])
 
-                    message = (f"今日是定投日，股票 {ticker} 的定投提醒：\n"
-                               f"收盘价: ${current_price:.2f}\n"
-                               f"建议购买股数: {shares_to_buy}\n"
-                               f"加权投资金额: ${investment_amount:.2f}")
+                    next_investment_date = self.get_next_investment_date(now)
+
+                    message = (
+                        f"定投提醒\n\n"
+                        f"日期时间: {now.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)\n"
+                        f"股票: {ticker}\n"
+                        f"当前价格: ${current_price:.2f}\n"
+                        f"建议购买股数: {shares_to_buy}\n"
+                        f"本次投资金额: ${investment_amount:.2f}\n"
+                        f"下一次预计定投时间: {next_investment_date.strftime('%Y-%m-%d')}"
+                    )
 
                     self.pushplus_sender.send_message(f"{ticker}定投提醒", message)
                     print(f"已发送 {ticker} 的定投提醒")
+
+                    if self.master:
+                        messagebox.showinfo(f"{ticker}定投提醒", message)
+                except Exception as e:
+                    print(f"获取 {ticker} 数据时出错: {str(e)}")
         else:
             print("今天不是定投日")
 
@@ -911,9 +909,9 @@ class InvestmentApp:
         investment_period_days = (end_date - start_date).days
 
         equal_annual_return = ((equal_final_value / total_equal_investment) ** (
-                    365.25 / investment_period_days) - 1) * 100
+                365.25 / investment_period_days) - 1) * 100
         weighted_annual_return = ((weighted_final_value / total_weighted_investment) ** (
-                    365.25 / investment_period_days) - 1) * 100
+                365.25 / investment_period_days) - 1) * 100
 
         # 更新摘要统计文本
         summary = f"\n{ticker} 的摘要统计：\n"
@@ -970,6 +968,9 @@ def run_cli(app, args):
             result = app.start_reminder()
             if result:
                 print("定投提醒功能已启动")
+                # Keep the script running
+                while True:
+                    time.sleep(60)  # 使用 time.sleep()，每分钟检查一次
             else:
                 print("定投提醒功能启动失败或已在运行中")
         else:
@@ -977,6 +978,16 @@ def run_cli(app, args):
 
 
 if __name__ == "__main__":
+    print("Testing schedule functionality...")
+    for _ in range(3):  # Run for 3 iterations to test schedule
+        schedule.run_pending()
+        time.sleep(1)
+    print("Schedule test completed")
+
+    # 清除测试用的任务
+    schedule.clear()
+
+    # 继续正常的应用程序初始化
     args = parse_arguments()
 
     if args.cli:
