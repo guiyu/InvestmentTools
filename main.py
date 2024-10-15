@@ -121,6 +121,8 @@ class InvestmentApp:
         if result:
             self.portfolio_allocations = result
             print("资产组合配置:", self.portfolio_allocations)
+            # 触发图表更新
+            self.update_plot()
         else:
             print("用户取消了资产配置")
 
@@ -477,7 +479,6 @@ class InvestmentApp:
         except Exception as e:
             messagebox.showerror("错误", f"分析过程中出现错误: {str(e)}")
             print(f"错误详情: {str(e)}")
-            # 添加更详细的错误信息打印
             import traceback
             traceback.print_exc()
 
@@ -767,6 +768,75 @@ class InvestmentApp:
 
         return portfolio_data
 
+    def add_endpoint_annotations(self, ax, equal_returns, weighted_returns, ticker, portfolio_returns=None):
+        ax.scatter(weighted_returns.index[-1], weighted_returns[ticker].iloc[-1], color='blue')
+        ax.annotate(f'{weighted_returns[ticker].iloc[-1]:.2f}',
+                    (weighted_returns.index[-1], weighted_returns[ticker].iloc[-1]),
+                    textcoords="offset points", xytext=(0, 10), ha='center')
+
+        ax.scatter(equal_returns.index[-1], equal_returns[ticker].iloc[-1], color='orange')
+        ax.annotate(f'{equal_returns[ticker].iloc[-1]:.2f}',
+                    (equal_returns.index[-1], equal_returns[ticker].iloc[-1]),
+                    textcoords="offset points", xytext=(0, 10), ha='center')
+
+        if portfolio_returns is not None:
+            ax.scatter(portfolio_returns.index[-1], portfolio_returns.iloc[-1], color='green')
+            ax.annotate(f'{portfolio_returns.iloc[-1]:.2f}',
+                        (portfolio_returns.index[-1], portfolio_returns.iloc[-1]),
+                        textcoords="offset points", xytext=(0, 10), ha='center')
+
+    def create_summary_statistics(self, ticker, equal_investment, weighted_investment,
+                                  equal_portfolio_values, weighted_portfolio_values,
+                                  equal_cumulative_returns, weighted_cumulative_returns,
+                                  start_date, end_date, portfolio_returns=None):
+        # 更新摘要统计
+        total_equal_investment = equal_investment[ticker].sum()
+        total_weighted_investment = weighted_investment[ticker].sum()
+
+        equal_final_value = equal_portfolio_values[ticker].iloc[-1]
+        weighted_final_value = weighted_portfolio_values[ticker].iloc[-1]
+
+        equal_total_return = (equal_final_value / total_equal_investment - 1) * 100
+        weighted_total_return = (weighted_final_value / total_weighted_investment - 1) * 100
+
+        investment_period_days = (end_date - start_date).days
+
+        equal_annual_return = ((equal_final_value / total_equal_investment) ** (
+                365.25 / investment_period_days) - 1) * 100
+        weighted_annual_return = ((weighted_final_value / total_weighted_investment) ** (
+                365.25 / investment_period_days) - 1) * 100
+
+        summary = f"\n{ticker} 的摘要统计：\n"
+        summary += f"等额定投:\n"
+        summary += f"  总投资: ${total_equal_investment:.2f}\n"
+        summary += f"  最终价值: ${equal_final_value:.2f}\n"
+        summary += f"  累计收益: ${equal_cumulative_returns[ticker].iloc[-1]:.2f}\n"
+        summary += f"  总回报率: {equal_total_return:.2f}%\n"
+        summary += f"  年化回报率: {equal_annual_return:.2f}%\n"
+        summary += f"加权定投:\n"
+        summary += f"  总投资: ${total_weighted_investment:.2f}\n"
+        summary += f"  最终价值: ${weighted_final_value:.2f}\n"
+        summary += f"  累计收益: ${weighted_cumulative_returns[ticker].iloc[-1]:.2f}\n"
+        summary += f"  总回报率: {weighted_total_return:.2f}%\n"
+        summary += f"  年化回报率: {weighted_annual_return:.2f}%\n"
+
+        if portfolio_returns is not None:
+            portfolio_final_value = portfolio_returns.iloc[-1] + self.config['base_investment'] * len(equal_investment)
+            portfolio_total_return = (portfolio_final_value / (
+                        self.config['base_investment'] * len(equal_investment)) - 1) * 100
+            portfolio_annual_return = ((portfolio_final_value / (
+                        self.config['base_investment'] * len(equal_investment))) ** (
+                                                   365.25 / (end_date - start_date).days) - 1) * 100
+
+            summary += f"资产组合:\n"
+            summary += f"  总投资: ${self.config['base_investment'] * len(equal_investment):.2f}\n"
+            summary += f"  最终价值: ${portfolio_final_value:.2f}\n"
+            summary += f"  累计收益: ${portfolio_returns.iloc[-1]:.2f}\n"
+            summary += f"  总回报率: {portfolio_total_return:.2f}%\n"
+            summary += f"  年化回报率: {portfolio_annual_return:.2f}%\n"
+
+        return summary
+
     def check_internet_connection(self):
         try:
             # 尝试连接到 Yahoo Finance 的网站
@@ -878,7 +948,15 @@ class InvestmentApp:
         ax1.plot(weighted_cumulative_returns.index, weighted_cumulative_returns[ticker], label=f'{ticker} 加权累计收益',
                  linestyle='--', color='blue')
 
-        ax1.set_title(f'{ticker}: 加权累计收益 vs 等权累计收益 ({start_date.year}-{end_date.year})')
+        portfolio_returns = None
+        # 如果有资产组合配置,则添加到 ax1
+        if self.portfolio_allocations:
+            portfolio_data = self.create_portfolio_data(data, start_date, end_date)
+            portfolio_returns = (portfolio_data['Portfolio'] - 1) * self.config['base_investment'] * len(
+                investment_dates)
+            ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
+
+        ax1.set_title(f'{ticker}: 累计收益比较 ({start_date.year}-{end_date.year})')
         ax1.set_ylabel('累计收益 ($)')
         ax1.legend()
         ax1.grid(True)
@@ -887,21 +965,17 @@ class InvestmentApp:
         ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
 
         # 确保 y 轴的范围包含所有数据点
-        y_min = min(equal_cumulative_returns[ticker].min(), weighted_cumulative_returns[ticker].min())
-        y_max = max(equal_cumulative_returns[ticker].max(), weighted_cumulative_returns[ticker].max())
+        y_values = [equal_cumulative_returns[ticker], weighted_cumulative_returns[ticker]]
+        if portfolio_returns is not None:
+            y_values.append(portfolio_returns)
+        y_min = min(min(y) for y in y_values)
+        y_max = max(max(y) for y in y_values)
         y_range = y_max - y_min
         ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
 
         # 添加终点标注
-        ax1.scatter(weighted_cumulative_returns.index[-1], weighted_cumulative_returns[ticker].iloc[-1], color='blue')
-        ax1.annotate(f'{weighted_cumulative_returns[ticker].iloc[-1]:.2f}',
-                     (weighted_cumulative_returns.index[-1], weighted_cumulative_returns[ticker].iloc[-1]),
-                     textcoords="offset points", xytext=(0, 10), ha='center')
-
-        ax1.scatter(equal_cumulative_returns.index[-1], equal_cumulative_returns[ticker].iloc[-1], color='orange')
-        ax1.annotate(f'{equal_cumulative_returns[ticker].iloc[-1]:.2f}',
-                     (equal_cumulative_returns.index[-1], equal_cumulative_returns[ticker].iloc[-1]),
-                     textcoords="offset points", xytext=(0, 10), ha='center')
+        self.add_endpoint_annotations(ax1, equal_cumulative_returns, weighted_cumulative_returns, ticker,
+                                      portfolio_returns)
 
         # 绘制MACD
         ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
@@ -935,7 +1009,6 @@ class InvestmentApp:
             ax3.legend()
             ax3.grid(True)
 
-
         # 格式化 x 轴
         plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
@@ -943,36 +1016,10 @@ class InvestmentApp:
         ax2.set_xlim(data.index[0], data.index[-1])
 
         # 更新摘要统计
-        total_equal_investment = equal_investment[ticker].sum()
-        total_weighted_investment = weighted_investment[ticker].sum()
-
-        equal_final_value = equal_portfolio_values[ticker].iloc[-1]
-        weighted_final_value = weighted_portfolio_values[ticker].iloc[-1]
-
-        equal_total_return = (equal_final_value / total_equal_investment - 1) * 100
-        weighted_total_return = (weighted_final_value / total_weighted_investment - 1) * 100
-
-        investment_period_days = (end_date - start_date).days
-
-        equal_annual_return = ((equal_final_value / total_equal_investment) ** (
-                365.25 / investment_period_days) - 1) * 100
-        weighted_annual_return = ((weighted_final_value / total_weighted_investment) ** (
-                365.25 / investment_period_days) - 1) * 100
-
-        # 更新摘要统计文本
-        summary = f"\n{ticker} 的摘要统计：\n"
-        summary += f"等额定投:\n"
-        summary += f"  总投资: ${total_equal_investment:.2f}\n"
-        summary += f"  最终价值: ${equal_final_value:.2f}\n"
-        summary += f"  累计收益: ${equal_cumulative_returns[ticker].iloc[-1]:.2f}\n"
-        summary += f"  总回报率: {equal_total_return:.2f}%\n"
-        summary += f"  年化回报率: {equal_annual_return:.2f}%\n"
-        summary += f"加权定投:\n"
-        summary += f"  总投资: ${total_weighted_investment:.2f}\n"
-        summary += f"  最终价值: ${weighted_final_value:.2f}\n"
-        summary += f"  累计收益: ${weighted_cumulative_returns[ticker].iloc[-1]:.2f}\n"
-        summary += f"  总回报率: {weighted_total_return:.2f}%\n"
-        summary += f"  年化回报率: {weighted_annual_return:.2f}%\n"
+        summary = self.create_summary_statistics(ticker, equal_investment, weighted_investment,
+                                                 equal_portfolio_values, weighted_portfolio_values,
+                                                 equal_cumulative_returns, weighted_cumulative_returns,
+                                                 start_date, end_date, portfolio_returns)
 
         ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
