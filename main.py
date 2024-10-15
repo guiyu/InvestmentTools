@@ -12,6 +12,8 @@ import matplotlib.dates as mdates
 import pandas as pd
 import threading
 import pytz
+
+from AssetAllocationDialog import AssetAllocationDialog
 from pushplus_sender import PushPlusSender
 from investment_tracker import InvestmentTracker
 import requests
@@ -38,7 +40,7 @@ class InvestmentApp:
         self.pushplus_token = self.load_token()
         self.pushplus_sender = None
         self.investment_tracker = None
-        self.is_logged_in = False  # 确保初始化时设置为 False
+        self.is_logged_in = False
 
         # 设置中文字体
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
@@ -56,6 +58,8 @@ class InvestmentApp:
             'macd_long_window': 26,
             'macd_signal_window': 9,
         }
+
+        self.portfolio_allocations = {}
 
         self.pushplus_sender = None
         self.reminder_thread = None
@@ -85,20 +89,20 @@ class InvestmentApp:
         if self.master is not None:
             self.init_gui()
 
-            # 在 GUI 初始化之后尝试自动登录
+        # 在 GUI 初始化之后尝试自动登录
         if self.pushplus_token:
             self.auto_login()
+
+    def init_gui(self):
+        self.master.title("投资策略分析")
+        self.master.geometry("1024x768")
+        self.create_widgets()
 
     def auto_login(self):
         if self.pushplus_login(self.pushplus_token):
             print("已使用保存的 token 自动登录")
         else:
             print("自动登录失败，请手动登录")
-
-    def init_gui(self):
-        self.master.title("投资策略分析")
-        self.master.geometry("1024x768")
-        self.create_widgets()
 
     def load_token(self):
         if os.path.exists(self.token_file):
@@ -110,6 +114,15 @@ class InvestmentApp:
     def save_token(self, token):
         with open(self.token_file, 'w') as f:
             json.dump({'token': token}, f)
+
+    def open_asset_allocation_dialog(self):
+        dialog = AssetAllocationDialog(self.master, self.config['tickers'])
+        result = dialog.show()
+        if result:
+            self.portfolio_allocations = result
+            print("资产组合配置:", self.portfolio_allocations)
+        else:
+            print("用户取消了资产配置")
 
     def create_widgets(self):
 
@@ -144,6 +157,10 @@ class InvestmentApp:
         self.input_investment_button = ttk.Button(self.left_frame, text="输入投资信息",
                                                   command=self.show_investment_input_dialog)
         self.input_investment_button.pack(pady=10)
+
+        # 添加资产配置按钮
+        self.portfolio_button = ttk.Button(self.left_frame, text="设置资产组合", command=self.open_asset_allocation_dialog)
+        self.portfolio_button.pack(pady=10)
 
         # 创建启动/停止提醒按钮
         self.reminder_button = ttk.Button(self.left_frame, text="启动提醒", command=self.toggle_reminder)
@@ -679,34 +696,36 @@ class InvestmentApp:
         excel_data['等权投资金额'] = equal_investment[ticker].round(2)
         excel_data['加权投资金额'] = weighted_investment[ticker].round(2)
 
-        # 1. 使用四舍五入计算买入股数
         excel_data['等权买入股数'] = np.round(excel_data['等权投资金额'] / excel_data['收盘价']).astype(int)
         excel_data['加权买入股数'] = np.round(excel_data['加权投资金额'] / excel_data['收盘价']).astype(int)
 
-        # 2. 计算实际投资金额
         excel_data['等权实际投资金额'] = (excel_data['等权买入股数'] * excel_data['收盘价']).round(2)
         excel_data['加权实际投资金额'] = (excel_data['加权买入股数'] * excel_data['收盘价']).round(2)
 
-        # 计算累计持股数和累计投资金额
         excel_data['等权累计持股数'] = excel_data['等权买入股数'].cumsum()
         excel_data['加权累计持股数'] = excel_data['加权买入股数'].cumsum()
         excel_data['等权累计投资'] = excel_data['等权实际投资金额'].cumsum().round(2)
         excel_data['加权累计投资'] = excel_data['加权实际投资金额'].cumsum().round(2)
 
-        # 计算累计市值
         excel_data['等权累计市值'] = (excel_data['等权累计持股数'] * excel_data['收盘价']).round(2)
         excel_data['加权累计市值'] = (excel_data['加权累计持股数'] * excel_data['收盘价']).round(2)
 
-        # 3. 更新平均成本的计算
         excel_data['等权平均成本'] = (excel_data['等权累计投资'] / excel_data['等权累计持股数']).round(2)
         excel_data['加权平均成本'] = (excel_data['加权累计投资'] / excel_data['加权累计持股数']).round(2)
 
-        # 计算累计收益
         excel_data['等权累计收益'] = (excel_data['等权累计市值'] - excel_data['等权累计投资']).round(2)
         excel_data['加权累计收益'] = (excel_data['加权累计市值'] - excel_data['加权累计投资']).round(2)
 
-        # 添加基础投资金额到 Excel 文件
         excel_data['基础投资金额'] = self.config['base_investment']
+
+        # 添加资产组合数据
+        if self.portfolio_allocations:
+            portfolio_data = self.create_portfolio_data(data, start_date, end_date)
+            excel_data['资产组合价值'] = portfolio_data['Portfolio']
+
+            # 计算资产组合的累计收益
+            initial_investment = self.config['base_investment'] * len(investment_dates)
+            excel_data['资产组合累计收益'] = (excel_data['资产组合价值'] * initial_investment - initial_investment).round(2)
 
         # 创建 output 目录（如果不存在）
         output_dir = 'output'
@@ -723,6 +742,11 @@ class InvestmentApp:
         equal_cumulative_returns = excel_data['等权累计收益']
         weighted_cumulative_returns = excel_data['加权累计收益']
 
+        if self.portfolio_allocations:
+            portfolio_cumulative_returns = excel_data['资产组合累计收益']
+            print("\n资产组合累计收益:")
+            print(portfolio_cumulative_returns)
+
         # 打印累计收益数值到终端
         print("\n等权累计收益:")
         print(equal_cumulative_returns)
@@ -731,6 +755,17 @@ class InvestmentApp:
 
         # 返回累计收益数值
         return equal_cumulative_returns, weighted_cumulative_returns
+
+    def create_portfolio_data(self, data, start_date, end_date):
+        portfolio_data = pd.DataFrame(index=data.index)
+        portfolio_data['Portfolio'] = 0
+
+        for ticker, weight in self.portfolio_allocations.items():
+            ticker_data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
+            normalized_data = ticker_data / ticker_data.iloc[0]
+            portfolio_data['Portfolio'] += normalized_data * weight
+
+        return portfolio_data
 
     def check_internet_connection(self):
         try:
@@ -889,6 +924,17 @@ class InvestmentApp:
         ax2.xaxis.set_major_locator(years)
         ax2.xaxis.set_major_formatter(years_fmt)
         ax2.xaxis.set_minor_locator(months)
+
+        if self.portfolio_allocations:
+            portfolio_data = self.create_portfolio_data(data, start_date, end_date)
+
+            # 绘制组合数据
+            ax3 = fig.add_subplot(313, sharex=ax1)
+            ax3.plot(portfolio_data.index, portfolio_data['Portfolio'], label='资产组合', color='green')
+            ax3.set_ylabel('组合价值')
+            ax3.legend()
+            ax3.grid(True)
+
 
         # 格式化 x 轴
         plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
