@@ -694,11 +694,9 @@ class InvestmentApp:
 
         excel_data['日期'] = investment_dates
         excel_data['收盘价'] = data.loc[investment_dates, ticker].round(2)
-        excel_data['等权投资金额'] = equal_investment[ticker].round(2)
-        excel_data['加权投资金额'] = weighted_investment[ticker].round(2)
 
-        excel_data['等权买入股数'] = np.round(excel_data['等权投资金额'] / excel_data['收盘价']).astype(int)
-        excel_data['加权买入股数'] = np.round(excel_data['加权投资金额'] / excel_data['收盘价']).astype(int)
+        excel_data['等权买入股数'] = np.round(equal_investment[ticker] / excel_data['收盘价']).astype(int)
+        excel_data['加权买入股数'] = np.round(weighted_investment[ticker] / excel_data['收盘价']).astype(int)
 
         excel_data['等权实际投资金额'] = (excel_data['等权买入股数'] * excel_data['收盘价']).round(2)
         excel_data['加权实际投资金额'] = (excel_data['加权买入股数'] * excel_data['收盘价']).round(2)
@@ -717,9 +715,7 @@ class InvestmentApp:
         excel_data['等权累计收益'] = (excel_data['等权累计市值'] - excel_data['等权累计投资']).round(2)
         excel_data['加权累计收益'] = (excel_data['加权累计市值'] - excel_data['加权累计投资']).round(2)
 
-        excel_data['基础投资金额'] = self.config['base_investment']
-
-        # 添加资产组合数据
+        portfolio_returns = None
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
             excel_data['资产组合价值'] = portfolio_data['Portfolio']
@@ -727,6 +723,23 @@ class InvestmentApp:
             # 计算资产组合的累计收益
             initial_investment = self.config['base_investment'] * len(investment_dates)
             excel_data['资产组合累计收益'] = (excel_data['资产组合价值'] * initial_investment - initial_investment).round(2)
+            portfolio_returns = excel_data['资产组合累计收益']
+
+            # 添加资产组合详细信息
+            portfolio_details_list = []
+            for asset, weight in self.portfolio_allocations.items():
+                asset_data = yf.download(asset, start=start_date, end=end_date)['Adj Close']
+                asset_investment = initial_investment * weight
+                asset_shares = np.floor(asset_investment / asset_data.iloc[-1])
+                portfolio_details_list.append({
+                    '标的名称': asset,
+                    '标的股数': asset_shares,
+                    '实际投资金额': (asset_shares * asset_data.iloc[-1]).round(2)
+                })
+
+            portfolio_details = pd.DataFrame(portfolio_details_list)
+            portfolio_details['实际投资金额总额'] = portfolio_details['实际投资金额'].sum()
+            portfolio_details['资产组合累计收益'] = excel_data['资产组合累计收益'].iloc[-1]
 
         # 创建 output 目录（如果不存在）
         output_dir = 'output'
@@ -736,35 +749,62 @@ class InvestmentApp:
         # 修改文件保存路径
         filename = os.path.join(output_dir,
                                 f"{ticker}_投资数据_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx")
-        excel_data.to_excel(filename, index=False)
+
+        # 创建 ExcelWriter 对象
+        with pd.ExcelWriter(filename) as writer:
+            excel_data.to_excel(writer, sheet_name='投资详情', index=False)
+            if self.portfolio_allocations:
+                portfolio_details.to_excel(writer, sheet_name='资产组合详情', index=False)
+
         print(f"数据已保存到文件: {filename}")
 
-        # 保存累计收益数值
+        # 返回与 create_summary_statistics 方法兼容的数据
+        equal_portfolio_values = excel_data['等权累计市值']
+        weighted_portfolio_values = excel_data['加权累计市值']
         equal_cumulative_returns = excel_data['等权累计收益']
         weighted_cumulative_returns = excel_data['加权累计收益']
 
-        if self.portfolio_allocations:
-            portfolio_cumulative_returns = excel_data['资产组合累计收益']
-            print("\n资产组合累计收益:")
-            print(portfolio_cumulative_returns)
-
-        # 打印累计收益数值到终端
-        print("\n等权累计收益:")
-        print(equal_cumulative_returns)
-        print("\n加权累计收益:")
-        print(weighted_cumulative_returns)
-
-        # 返回累计收益数值
-        return equal_cumulative_returns, weighted_cumulative_returns
+        return (equal_investment, weighted_investment,
+                equal_portfolio_values, weighted_portfolio_values,
+                equal_cumulative_returns, weighted_cumulative_returns,
+                portfolio_returns)
 
     def create_portfolio_data(self, data, start_date, end_date):
         portfolio_data = pd.DataFrame(index=data.index)
         portfolio_data['Portfolio'] = 0
 
         for ticker, weight in self.portfolio_allocations.items():
-            ticker_data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
-            normalized_data = ticker_data / ticker_data.iloc[0]
-            portfolio_data['Portfolio'] += normalized_data * weight
+            try:
+                ticker_data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
+
+                if ticker_data.empty:
+                    print(f"警告: 无法获取 {ticker} 的数据。跳过这个资产。")
+                    continue
+
+                # 确保 ticker_data 的索引与 portfolio_data 的索引匹配
+                ticker_data = ticker_data.reindex(portfolio_data.index)
+
+                # 处理可能的 NaN 值
+                ticker_data = ticker_data.ffill().bfill()
+
+                if ticker_data.empty or ticker_data.isna().all():
+                    print(f"警告: {ticker} 的所有数据都是 NaN。跳过这个资产。")
+                    continue
+
+                first_valid_value = ticker_data.iloc[0]  # 使用第一个非 NaN 值
+                if pd.isna(first_valid_value):
+                    print(f"警告: {ticker} 的第一个值是 NaN。跳过这个资产。")
+                    continue
+
+                normalized_data = ticker_data / first_valid_value
+                portfolio_data['Portfolio'] += normalized_data * weight
+            except Exception as e:
+                print(f"处理 {ticker} 时出错: {str(e)}")
+                continue
+
+        if portfolio_data['Portfolio'].sum() == 0:
+            print("警告: 无法创建有效的投资组合数据。所有资产都被跳过。")
+            return pd.DataFrame()  # 返回空的 DataFrame
 
         return portfolio_data
 
@@ -821,19 +861,30 @@ class InvestmentApp:
         summary += f"  年化回报率: {weighted_annual_return:.2f}%\n"
 
         if portfolio_returns is not None:
-            portfolio_final_value = portfolio_returns.iloc[-1] + self.config['base_investment'] * len(equal_investment)
-            portfolio_total_return = (portfolio_final_value / (
-                        self.config['base_investment'] * len(equal_investment)) - 1) * 100
-            portfolio_annual_return = ((portfolio_final_value / (
-                        self.config['base_investment'] * len(equal_investment))) ** (
-                                                   365.25 / (end_date - start_date).days) - 1) * 100
+            # 计算资产组合的统计数据
+            initial_investment = self.config['base_investment'] * len(equal_investment)
+            portfolio_final_value = portfolio_returns.iloc[-1] + initial_investment
+
+            # 计算实际总投资额
+            total_actual_investment = 0
+            for asset, weight in self.portfolio_allocations.items():
+                asset_data = yf.download(asset, start=start_date, end=end_date)['Adj Close']
+                asset_investment = initial_investment * weight
+                asset_shares = np.floor(asset_investment / asset_data.iloc[-1])
+                total_actual_investment += (asset_shares * asset_data.iloc[-1]).round(2)
+
+            # 计算总回报率
+            total_return = ((portfolio_final_value / total_actual_investment) - 1) * 100
+
+            # 计算年化回报率
+            years = (end_date - start_date).days / 365.25
+            annual_return = ((portfolio_final_value / total_actual_investment) ** (1 / years) - 1) * 100
 
             summary += f"资产组合:\n"
-            summary += f"  总投资: ${self.config['base_investment'] * len(equal_investment):.2f}\n"
+            summary += f"  实际总投资额: ${total_actual_investment:.2f}\n"
             summary += f"  最终价值: ${portfolio_final_value:.2f}\n"
-            summary += f"  累计收益: ${portfolio_returns.iloc[-1]:.2f}\n"
-            summary += f"  总回报率: {portfolio_total_return:.2f}%\n"
-            summary += f"  年化回报率: {portfolio_annual_return:.2f}%\n"
+            summary += f"  总回报率: {total_return:.2f}%\n"
+            summary += f"  年化回报率: {annual_return:.2f}%\n"
 
         return summary
 
@@ -949,7 +1000,6 @@ class InvestmentApp:
                  linestyle='--', color='blue')
 
         portfolio_returns = None
-        # 如果有资产组合配置,则添加到 ax1
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
             portfolio_returns = (portfolio_data['Portfolio'] - 1) * self.config['base_investment'] * len(
@@ -961,10 +1011,10 @@ class InvestmentApp:
         ax1.legend()
         ax1.grid(True)
 
-        # 添加零线
+        # Add zero line
         ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
 
-        # 确保 y 轴的范围包含所有数据点
+        # Ensure y-axis range includes all data points
         y_values = [equal_cumulative_returns[ticker], weighted_cumulative_returns[ticker]]
         if portfolio_returns is not None:
             y_values.append(portfolio_returns)
@@ -973,11 +1023,11 @@ class InvestmentApp:
         y_range = y_max - y_min
         ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
 
-        # 添加终点标注
+        # Add endpoint annotations
         self.add_endpoint_annotations(ax1, equal_cumulative_returns, weighted_cumulative_returns, ticker,
                                       portfolio_returns)
 
-        # 绘制MACD
+        # Plot MACD
         ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
         ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
         ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'], label='Histogram', color='gray',
@@ -987,35 +1037,25 @@ class InvestmentApp:
         ax2.legend(loc='upper left')
         ax2.grid(True)
 
-        # 设置x轴标签
+        # Set x-axis label
         ax2.set_xlabel('日期')
 
-        # 设置 x 轴刻度
-        years = mdates.YearLocator(2)  # 每两年
-        months = mdates.MonthLocator()  # 每月
+        # Set x-axis ticks
+        years = mdates.YearLocator(2)  # every two years
+        months = mdates.MonthLocator()  # every month
         years_fmt = mdates.DateFormatter('%Y')
 
         ax2.xaxis.set_major_locator(years)
         ax2.xaxis.set_major_formatter(years_fmt)
         ax2.xaxis.set_minor_locator(months)
 
-        if self.portfolio_allocations:
-            portfolio_data = self.create_portfolio_data(data, start_date, end_date)
-
-            # 绘制组合数据
-            ax3 = fig.add_subplot(313, sharex=ax1)
-            ax3.plot(portfolio_data.index, portfolio_data['Portfolio'], label='资产组合', color='green')
-            ax3.set_ylabel('组合价值')
-            ax3.legend()
-            ax3.grid(True)
-
-        # 格式化 x 轴
+        # Format x-axis
         plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-        # 自动调整日期范围
+        # Auto-adjust date range
         ax2.set_xlim(data.index[0], data.index[-1])
 
-        # 更新摘要统计
+        # Update summary statistics
         summary = self.create_summary_statistics(ticker, equal_investment, weighted_investment,
                                                  equal_portfolio_values, weighted_portfolio_values,
                                                  equal_cumulative_returns, weighted_cumulative_returns,
@@ -1024,7 +1064,7 @@ class InvestmentApp:
         ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-        # 调整布局
+        # Adjust layout
         plt.tight_layout()
         return fig
 
