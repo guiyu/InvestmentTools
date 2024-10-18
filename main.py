@@ -12,7 +12,7 @@ import matplotlib.dates as mdates
 import pandas as pd
 import threading
 import pytz
-
+import logging
 from AssetAllocationDialog import AssetAllocationDialog
 from pushplus_sender import PushPlusSender
 from investment_tracker import InvestmentTracker
@@ -41,14 +41,14 @@ class InvestmentApp:
         self.pushplus_sender = None
         self.investment_tracker = None
         self.is_logged_in = False
-
+        self.setup_logger()
         # 设置中文字体
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
         plt.rcParams['axes.unicode_minus'] = False
 
         # 配置
         self.config = {
-            'tickers': ['SPY', 'QQQ', 'XLG', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'KWEB'],
+            'tickers': ['SPY', 'QQQ', 'XLG', 'VOO', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'TPHD', 'BNDC','BND','KWEB'],
             'base_investment': 4000,
             'sma_window': 200,
             'std_window': 30,
@@ -718,28 +718,11 @@ class InvestmentApp:
         portfolio_returns = None
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
-            excel_data['资产组合价值'] = portfolio_data['Portfolio']
-
-            # 计算资产组合的累计收益
-            initial_investment = self.config['base_investment'] * len(investment_dates)
-            excel_data['资产组合累计收益'] = (excel_data['资产组合价值'] * initial_investment - initial_investment).round(2)
-            portfolio_returns = excel_data['资产组合累计收益']
-
-            # 添加资产组合详细信息
-            portfolio_details_list = []
-            for asset, weight in self.portfolio_allocations.items():
-                asset_data = yf.download(asset, start=start_date, end=end_date)['Adj Close']
-                asset_investment = initial_investment * weight
-                asset_shares = np.floor(asset_investment / asset_data.iloc[-1])
-                portfolio_details_list.append({
-                    '标的名称': asset,
-                    '标的股数': asset_shares,
-                    '实际投资金额': (asset_shares * asset_data.iloc[-1]).round(2)
-                })
-
-            portfolio_details = pd.DataFrame(portfolio_details_list)
-            portfolio_details['实际投资金额总额'] = portfolio_details['实际投资金额'].sum()
-            portfolio_details['资产组合累计收益'] = excel_data['资产组合累计收益'].iloc[-1]
+            excel_data['投资组合价值'] = portfolio_data['Portfolio_Value'].round(2)
+            excel_data['累计投资成本'] = portfolio_data['Portfolio_Cost'].round(2)
+            excel_data['资产组合累计收益'] = portfolio_data['Portfolio_Return'].round(2)
+            excel_data['总回报率'] = portfolio_data['Total_Return_Rate'].round(4)
+            portfolio_returns = portfolio_data['Portfolio_Return']
 
         # 创建 output 目录（如果不存在）
         output_dir = 'output'
@@ -754,6 +737,13 @@ class InvestmentApp:
         with pd.ExcelWriter(filename) as writer:
             excel_data.to_excel(writer, sheet_name='投资详情', index=False)
             if self.portfolio_allocations:
+                portfolio_details = pd.DataFrame({
+                    '标的名称': self.portfolio_allocations.keys(),
+                    '配置比例': self.portfolio_allocations.values(),
+                    '最终持股数': [portfolio_data[f'{t}_Shares'].iloc[-1] for t in self.portfolio_allocations.keys()],
+                    '累计投资金额': [portfolio_data[f'{t}_Cost'].iloc[-1] for t in self.portfolio_allocations.keys()]
+                })
+                portfolio_details['实际投资比例'] = portfolio_details['累计投资金额'] / portfolio_details['累计投资金额'].sum()
                 portfolio_details.to_excel(writer, sheet_name='资产组合详情', index=False)
 
         print(f"数据已保存到文件: {filename}")
@@ -769,42 +759,83 @@ class InvestmentApp:
                 equal_cumulative_returns, weighted_cumulative_returns,
                 portfolio_returns)
 
+    def setup_logger(self):
+        self.logger = logging.getLogger(__name__)
+        if not self.logger.handlers:
+            self.logger.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            ch = logging.StreamHandler()
+            ch.setFormatter(formatter)
+            self.logger.addHandler(ch)
+
     def create_portfolio_data(self, data, start_date, end_date):
+        if not self.portfolio_allocations:
+            return pd.DataFrame()
+
+        self.logger.info(f"开始创建投资组合数据 - 起始日期: {start_date}, 结束日期: {end_date}")
+        self.logger.info(f"投资组合配置: {self.portfolio_allocations}")
+
         portfolio_data = pd.DataFrame(index=data.index)
-        portfolio_data['Portfolio'] = 0
+        portfolio_data['Portfolio_Value'] = 0.0
+        portfolio_data['Portfolio_Cost'] = 0.0
 
-        for ticker, weight in self.portfolio_allocations.items():
-            try:
-                ticker_data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
+        for ticker in self.portfolio_allocations.keys():
+            portfolio_data[f'{ticker}_Shares'] = 0.0
+            portfolio_data[f'{ticker}_Cost'] = 0.0
 
-                if ticker_data.empty:
-                    print(f"警告: 无法获取 {ticker} 的数据。跳过这个资产。")
+        investment_dates = self.get_investment_dates(start_date, end_date, data.index)
+        self.logger.info(f"投资日期: {investment_dates}")
+
+        cumulative_investment = 0.0
+
+        for date in investment_dates:
+            self.logger.info(f"\n--- 投资日期: {date} ---")
+            total_investment = 0.0
+            for ticker, weight in self.portfolio_allocations.items():
+                if weight == 0:
                     continue
+                if ticker not in data.columns:
+                    ticker_data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
+                    data[ticker] = ticker_data
 
-                # 确保 ticker_data 的索引与 portfolio_data 的索引匹配
-                ticker_data = ticker_data.reindex(portfolio_data.index)
+                price = data.loc[date, ticker]
+                allocation = self.config['base_investment'] * weight
+                shares = np.ceil(allocation / price)
+                actual_investment = shares * price
+                total_investment += actual_investment
 
-                # 处理可能的 NaN 值
-                ticker_data = ticker_data.ffill().bfill()
+                portfolio_data.loc[date:, f'{ticker}_Shares'] += shares
+                portfolio_data.loc[date:, f'{ticker}_Cost'] += actual_investment
 
-                if ticker_data.empty or ticker_data.isna().all():
-                    print(f"警告: {ticker} 的所有数据都是 NaN。跳过这个资产。")
+                self.logger.info(f"标的: {ticker}")
+                self.logger.info(f"  价格: ${price:.2f}")
+                self.logger.info(f"  分配金额: ${allocation:.2f}")
+                self.logger.info(f"  购买股数: {shares}")
+                self.logger.info(f"  实际投资金额: ${actual_investment:.2f}")
+
+            cumulative_investment += total_investment
+            portfolio_data.loc[date:, 'Portfolio_Cost'] = cumulative_investment
+            self.logger.info(f"本期总投资金额: ${total_investment:.2f}")
+            self.logger.info(f"累计投资成本: ${cumulative_investment:.2f}")
+
+        self.logger.info("\n--- 投资组合累计数据 ---")
+        for date in data.index:
+            portfolio_value = 0.0
+            for ticker, weight in self.portfolio_allocations.items():
+                if weight == 0:
                     continue
+                shares = portfolio_data.loc[date, f'{ticker}_Shares']
+                price = data.loc[date, ticker]
+                portfolio_value += shares * price
+            portfolio_data.loc[date, 'Portfolio_Value'] = portfolio_value
 
-                first_valid_value = ticker_data.iloc[0]  # 使用第一个非 NaN 值
-                if pd.isna(first_valid_value):
-                    print(f"警告: {ticker} 的第一个值是 NaN。跳过这个资产。")
-                    continue
+        portfolio_data['Portfolio_Return'] = portfolio_data['Portfolio_Value'] - portfolio_data['Portfolio_Cost']
+        portfolio_data['Total_Return_Rate'] = portfolio_data['Portfolio_Return'] / portfolio_data['Portfolio_Cost']
 
-                normalized_data = ticker_data / first_valid_value
-                portfolio_data['Portfolio'] += normalized_data * weight
-            except Exception as e:
-                print(f"处理 {ticker} 时出错: {str(e)}")
-                continue
-
-        if portfolio_data['Portfolio'].sum() == 0:
-            print("警告: 无法创建有效的投资组合数据。所有资产都被跳过。")
-            return pd.DataFrame()  # 返回空的 DataFrame
+        self.logger.info(f"最终投资组合价值: ${portfolio_data['Portfolio_Value'].iloc[-1]:.2f}")
+        self.logger.info(f"累计投资成本: ${portfolio_data['Portfolio_Cost'].iloc[-1]:.2f}")
+        self.logger.info(f"资产组合累计收益: ${portfolio_data['Portfolio_Return'].iloc[-1]:.2f}")
+        self.logger.info(f"总回报率: {portfolio_data['Total_Return_Rate'].iloc[-1] * 100:.2f}%")
 
         return portfolio_data
 
@@ -1002,8 +1033,7 @@ class InvestmentApp:
         portfolio_returns = None
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
-            portfolio_returns = (portfolio_data['Portfolio'] - 1) * self.config['base_investment'] * len(
-                investment_dates)
+            portfolio_returns = portfolio_data['Portfolio_Return']
             ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
 
         ax1.set_title(f'{ticker}: 累计收益比较 ({start_date.year}-{end_date.year})')
