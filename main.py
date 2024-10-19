@@ -724,6 +724,31 @@ class InvestmentApp:
             excel_data['总回报率'] = portfolio_data['Total_Return_Rate'].round(4)
             portfolio_returns = portfolio_data['Portfolio_Return']
 
+            # 添加详细的投资信息
+            excel_data['总投资金额'] = np.nan
+            excel_data['累计投资成本'] = np.nan
+
+            for date in investment_dates:
+                if 'Investment_Details' in portfolio_data.columns and isinstance(
+                        portfolio_data.loc[date, 'Investment_Details'], dict):
+                    details = portfolio_data.loc[date, 'Investment_Details']
+                    excel_data.loc[date, '总投资金额'] = details['总投资金额']
+                    excel_data.loc[date, '累计投资成本'] = details['累计投资成本']
+
+                    purchased_tickers = []
+                    for ticker in self.portfolio_allocations.keys():
+                        if f'{ticker}_购买股数' in details and details[f'{ticker}_购买股数'] > 0:
+                            purchased_tickers.append(ticker)
+                            for col in ['价格', '分配金额', '购买股数', '实际投资金额']:
+                                key = f'{ticker}_{col}'
+                                if key not in excel_data.columns:
+                                    excel_data[key] = np.nan
+                                excel_data.loc[date, key] = details[key]
+
+                    # 创建购买详情列
+                    purchase_details = '; '.join([f"{t}: {details[f'{t}_购买股数']:.2f}" for t in purchased_tickers])
+                    excel_data.loc[date, '购买详情'] = purchase_details if purchase_details else '无购买'
+
         # 创建 output 目录（如果不存在）
         output_dir = 'output'
         if not os.path.exists(output_dir):
@@ -779,6 +804,9 @@ class InvestmentApp:
         portfolio_data['Portfolio_Value'] = 0.0
         portfolio_data['Portfolio_Cost'] = 0.0
 
+        # 新增：创建一个 DataFrame 来存储每个投资日期的详细信息
+        investment_details = []
+
         for ticker in self.portfolio_allocations.keys():
             portfolio_data[f'{ticker}_Shares'] = 0.0
             portfolio_data[f'{ticker}_Cost'] = 0.0
@@ -791,6 +819,7 @@ class InvestmentApp:
         for date in investment_dates:
             self.logger.info(f"\n--- 投资日期: {date} ---")
             total_investment = 0.0
+            date_details = {'日期': date, '总投资金额': 0.0, '累计投资成本': 0.0}
             for ticker, weight in self.portfolio_allocations.items():
                 if weight == 0:
                     continue
@@ -813,10 +842,19 @@ class InvestmentApp:
                 self.logger.info(f"  购买股数: {shares}")
                 self.logger.info(f"  实际投资金额: ${actual_investment:.2f}")
 
+                date_details[f'{ticker}_价格'] = price
+                date_details[f'{ticker}_分配金额'] = allocation
+                date_details[f'{ticker}_购买股数'] = shares
+                date_details[f'{ticker}_实际投资金额'] = actual_investment
+
             cumulative_investment += total_investment
             portfolio_data.loc[date:, 'Portfolio_Cost'] = cumulative_investment
             self.logger.info(f"本期总投资金额: ${total_investment:.2f}")
             self.logger.info(f"累计投资成本: ${cumulative_investment:.2f}")
+
+            date_details['总投资金额'] = total_investment
+            date_details['累计投资成本'] = cumulative_investment
+            investment_details.append(date_details)
 
         self.logger.info("\n--- 投资组合累计数据 ---")
         for date in data.index:
@@ -836,6 +874,9 @@ class InvestmentApp:
         self.logger.info(f"累计投资成本: ${portfolio_data['Portfolio_Cost'].iloc[-1]:.2f}")
         self.logger.info(f"资产组合累计收益: ${portfolio_data['Portfolio_Return'].iloc[-1]:.2f}")
         self.logger.info(f"总回报率: {portfolio_data['Total_Return_Rate'].iloc[-1] * 100:.2f}%")
+
+        # 将详细投资信息添加到 portfolio_data
+        portfolio_data.loc[investment_dates, 'Investment_Details'] = pd.DataFrame(investment_details).to_dict('records')
 
         return portfolio_data
 
