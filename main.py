@@ -975,28 +975,21 @@ class InvestmentApp:
 
         # 如果有投资组合数据，添加投资组合统计
         if portfolio_returns is not None:
-            # 计算投资组合的统计数据
-            initial_investment = self.config['base_investment'] * len(equal_investment)
-            portfolio_final_value = portfolio_returns.iloc[-1] + initial_investment
+            # 使用附加到 portfolio_returns 的 portfolio_data
+            total_actual_investment = portfolio_returns.portfolio_data['Portfolio_Cost'].iloc[-1]
+            portfolio_final_value = portfolio_returns.portfolio_data['Portfolio_Value'].iloc[-1]
+            portfolio_cumulative_return = portfolio_returns.iloc[-1]
 
-            # 计算实际总投资额
-            total_actual_investment = 0
-            for asset, weight in self.portfolio_allocations.items():
-                asset_data = yf.download(asset, start=start_date, end=end_date)['Adj Close']
-                asset_investment = initial_investment * weight
-                asset_shares = np.floor(asset_investment / asset_data.iloc[-1])
-                total_actual_investment += (asset_shares * asset_data.iloc[-1]).round(2)
-
-            # 计算累计收益和各项收益率
-            portfolio_cumulative_return = portfolio_final_value - total_actual_investment
+            # 计算收益率
             portfolio_total_return = ((portfolio_final_value / total_actual_investment) - 1) * 100
             years = (end_date - start_date).days / 365.25
             portfolio_annual_return = ((portfolio_final_value / total_actual_investment) ** (1 / years) - 1) * 100
 
+            # 生成摘要
             summary += f"资产组合:\n"
             summary += f"  实际总投资额: ${total_actual_investment:.2f}\n"
             summary += f"  最终价值: ${portfolio_final_value:.2f}\n"
-            summary += f"  累计收益: ${portfolio_cumulative_return:.2f}\n"  # 新增的累计收益项
+            summary += f"  累计收益: ${portfolio_cumulative_return:.2f}\n"
             summary += f"  总回报率: {portfolio_total_return:.2f}%\n"
             summary += f"  年化回报率: {portfolio_annual_return:.2f}%\n"
 
@@ -1115,10 +1108,13 @@ class InvestmentApp:
         ax1.plot(daily_data.index, daily_data['weighted_cumulative_return'],
                  label=f'{ticker} 加权累计收益', color='blue')
 
+        # 在 analyze_and_plot 方法中，修改这部分代码
         portfolio_returns = None
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
             portfolio_returns = portfolio_data['Portfolio_Return']
+            # 将整个 portfolio_data 附加到 portfolio_returns
+            portfolio_returns.portfolio_data = portfolio_data
             ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
 
         # 设置图表属性
