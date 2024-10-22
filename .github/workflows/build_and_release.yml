@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   push:
-    branches: [ bugfix_github_actions ]
+    branches: [ main ]
     tags:
       - 'v*'
   pull_request:
