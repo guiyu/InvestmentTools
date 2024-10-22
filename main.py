@@ -987,6 +987,11 @@ class InvestmentApp:
 
             # 生成摘要
             summary += f"资产组合:\n"
+            # 添加投资标的和占比
+            allocations = [f"{asset}({weight * 100:.0f}%)" for asset, weight in self.portfolio_allocations.items() if
+                           weight > 0]
+            summary += f"  投资标的: {', '.join(allocations)}\n"
+            # 继续添加其他统计信息
             summary += f"  实际总投资额: ${total_actual_investment:.2f}\n"
             summary += f"  最终价值: ${portfolio_final_value:.2f}\n"
             summary += f"  累计收益: ${portfolio_cumulative_return:.2f}\n"
@@ -994,7 +999,6 @@ class InvestmentApp:
             summary += f"  年化回报率: {portfolio_annual_return:.2f}%\n"
 
         return summary
-
     def check_internet_connection(self):
         try:
             # 尝试连接到 Yahoo Finance 的网站
