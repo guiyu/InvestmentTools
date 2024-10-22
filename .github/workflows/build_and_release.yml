@@ -17,13 +17,17 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: [3.9]
 
+    permissions:
+      contents: read
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: 'pip'
 
     - name: Install dependencies
       run: |
@@ -36,39 +40,36 @@ jobs:
         pyinstaller --name=InvestmentApp --onefile main.py
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: InvestmentApp-${{ runner.os }}
         path: dist/*
+        retention-days: 5
 
   release:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
+    permissions:
+      contents: write
+      discussions: write
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Download artifacts
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
 
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
-
-    - name: Upload Release Assets
-      uses: actions/upload-release-asset@v1
+        files: |
+          InvestmentApp-Linux/InvestmentApp
+          InvestmentApp-Windows/InvestmentApp.exe
+          InvestmentApp-macOS/InvestmentApp
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./InvestmentApp-${{ runner.os }}/InvestmentApp${{ runner.os == 'Windows' && '.exe' || '' }}
-        asset_name: InvestmentApp-${{ runner.os }}${{ runner.os == 'Windows' && '.exe' || '' }}
-        asset_content_type: application/octet-stream
