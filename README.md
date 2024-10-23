@@ -87,13 +87,6 @@
 
 如果您觉得这个工具对您有帮助，欢迎赞赏支持，这将帮助我们更好地维护和改进这个项目。
 
-<div style="display: flex; justify-content: center; gap: 20px;">
-    <div style="text-align: center;">
-        <img src="images/wechat_qr.png" alt="微信收款码" width="200"/>
-        <p>微信赞赏</p>
-    </div>
-    <div style="text-align: center;">
-        <img src="images/alipay_qr.jpg" alt="支付宝收款码" width="200"/>
-        <p>支付宝赞赏</p>
-    </div>
-</div>
+| 微信赞赏 | 支付宝赞赏 |
+| :---: | :---: |
+| ![微信赞赏码](images/wechat_qr.png) | ![支付宝赞赏码](images/alipay_qr.jpg) |
