@@ -93,7 +93,7 @@
         <p>微信赞赏</p>
     </div>
     <div style="text-align: center;">
-        <img src="images/alipay_qr.png" alt="支付宝收款码" width="200"/>
+        <img src="images/alipay_qr.jpg" alt="支付宝收款码" width="200"/>
         <p>支付宝赞赏</p>
     </div>
 </div>
