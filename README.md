@@ -87,17 +87,13 @@
 
 如果您觉得这个工具对您有帮助，欢迎赞赏支持，这将帮助我们更好地维护和改进这个项目。
 
-<div style="display: flex; justify-content: center; align-items: flex-start; gap: 40px; margin: 20px 0;">
+<div style="display: flex; justify-content: center; gap: 20px;">
     <div style="text-align: center;">
-        <div style="width: 200px; height: 200px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 8px; overflow: hidden;">
-            <img src="images/wechat_qr.png" alt="微信收款码" style="width: 100%; height: 100%; object-fit: cover;">
-        </div>
-        <p style="margin: 0; color: #333; font-size: 14px;">微信赞赏</p>
+        <img src="images/wechat_qr.png" alt="微信收款码" width="200"/>
+        <p>微信赞赏</p>
     </div>
     <div style="text-align: center;">
-        <div style="width: 200px; height: 200px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 8px; overflow: hidden;">
-            <img src="images/alipay_qr.jpg" alt="支付宝收款码" style="width: 100%; height: 100%; object-fit: cover;">
-        </div>
-        <p style="margin: 0; color: #333; font-size: 14px;">支付宝赞赏</p>
+        <img src="images/alipay_qr.jpg" alt="支付宝收款码" width="200"/>
+        <p>支付宝赞赏</p>
     </div>
 </div>
