@@ -3,9 +3,9 @@
 
 这是一个用Python开发的投资策略分析工具，旨在帮助投资者比较不同的定投策略效果。该工具支持分析美国市场的多种ETF和指数，提供图形化界面，便于用户交互和结果可视化。此外，它还支持通过PushPlus进行定投提醒推送。
 
-![SPY累计收益](example1.png)
+![SPY累计收益](images/example1.png)
 
-![定投数据分析](example2.png)
+![定投数据分析](images/example2.png)
 
 ## 主要功能
 
