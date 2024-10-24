@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [ feature_readme_fixed ]
     tags:
       - 'v*'
   pull_request:
@@ -37,7 +37,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --name=InvestmentApp --onefile main.py
+        pyinstaller --name=InvestmentApp --onefile src/main.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4

@@ -22,13 +22,13 @@ def build_executable():
         run_command("pip install pyinstaller")
 
     # 主脚本名称
-    main_script = "main.py"
+    main_script = "src/main.py"
 
     # 可执行文件名称
     executable_name = "InvestmentTools"
 
     # 图标文件路径
-    icon_path = os.path.join(os.getcwd(), "icon.png")
+    icon_path = os.path.join(os.getcwd(), "../../images/icon.png")
 
     # 在 build_executable 函数中添加这段代码
     # if platform.system() == "Windows":

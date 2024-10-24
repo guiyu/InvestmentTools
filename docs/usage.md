@@ -6,7 +6,7 @@
 
 1. 运行主程序：
    ```bash
-   python main.py
+   python src/main.py
    ```
 
 2. 在图形界面中：
@@ -19,7 +19,7 @@
 
 1. 使用命令行参数运行：
    ```bash
-   python main.py --cli [options]
+   python src/main.py --cli [options]
    ```
 
    可用选项：
@@ -29,7 +29,7 @@
 
    示例：
    ```bash
-   python main.py --cli --login your_pushplus_token --estimate
+   python src/main.py --cli --login your_pushplus_token --estimate
    ```
 
 ## 基本功能
