@@ -362,8 +362,8 @@ class InvestmentApp:
     def pushplus_login(self, cli_token=None):
         token = cli_token or self.pushplus_token
 
-        # 如果当前已登录，执行退出登录操作
-        if self.is_logged_in:
+        # GUI模式下才处理退出登录
+        if self.master and self.is_logged_in:
             self.logout()
             return False
 
