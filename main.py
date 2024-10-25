@@ -99,10 +99,14 @@ class InvestmentApp:
         self.create_widgets()
 
     def auto_login(self):
-        if self.pushplus_login(self.pushplus_token):
-            print("已使用保存的 token 自动登录")
-        else:
-            print("自动登录失败，请手动登录")
+        """从本地文件自动登录"""
+        if not self.is_logged_in and self.pushplus_token:
+            if self.pushplus_login(self.pushplus_token):
+                print("已使用保存的 token 自动登录")
+            else:
+                print("自动登录失败，请手动登录")
+                # 自动登录失败时，确保清理状态
+                self.logout()
 
     def load_token(self):
         if os.path.exists(self.token_file):
@@ -127,10 +131,10 @@ class InvestmentApp:
             print("用户取消了资产配置")
 
     def create_widgets(self):
-
         if self.master is None:
             return
-        # 创建左侧框架
+
+            # 创建左侧框架
         self.left_frame = ttk.Frame(self.master, padding="10")
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, expand=False)
 
@@ -143,32 +147,36 @@ class InvestmentApp:
         # 创建基础投资金额输入框
         self.create_base_investment_input()
 
-        # 创建更新按钮
+        # 创建主要功能按钮
         self.update_button = ttk.Button(self.left_frame, text="更新图表", command=self.update_plot)
         self.update_button.pack(pady=10)
 
-        # 添加"当天定投估值"按钮
         self.estimate_button = ttk.Button(self.left_frame, text="当天定投估值", command=self.estimate_today_investment)
         self.estimate_button.pack(pady=10)
 
-        # 创建登录按钮
-        self.login_button = ttk.Button(self.left_frame, text="PushPlus登录", command=self.pushplus_login)
-        self.login_button.pack(pady=10)
+        # self.input_investment_button = ttk.Button(self.left_frame, text="输入投资信息",
+        #                                           command=self.show_investment_input_dialog)
+        # self.input_investment_button.pack(pady=10)
 
-        # 添加"输入投资信息"按钮
-        self.input_investment_button = ttk.Button(self.left_frame, text="输入投资信息",
-                                                  command=self.show_investment_input_dialog)
-        self.input_investment_button.pack(pady=10)
-
-        # 添加资产配置按钮
         self.portfolio_button = ttk.Button(self.left_frame, text="设置资产组合", command=self.open_asset_allocation_dialog)
         self.portfolio_button.pack(pady=10)
 
-        # 创建启动/停止提醒按钮
-        self.reminder_button = ttk.Button(self.left_frame, text="启动提醒", command=self.toggle_reminder)
-        self.reminder_button.pack(pady=10)
+        # 添加分割线
+        ttk.Separator(self.left_frame, orient='horizontal').pack(fill='x', pady=15)
 
-        # 创建右侧框架
+        # 创建PushPlus相关按钮（竖直排列）
+        pushplus_frame = ttk.Frame(self.left_frame)
+        pushplus_frame.pack(pady=10)
+
+        # PushPlus登录按钮
+        self.login_button = ttk.Button(pushplus_frame, text="PushPlus登录", command=self.pushplus_login)
+        self.login_button.pack(pady=(0, 5))  # 上边距0，下边距5
+
+        # 启动提醒按钮
+        self.reminder_button = ttk.Button(pushplus_frame, text="启动提醒", command=self.toggle_reminder)
+        self.reminder_button.pack(pady=(5, 0))  # 上边距5，下边距0
+
+        # 创建右侧框架和图表（保持不变）
         self.right_frame = ttk.Frame(self.master, padding="10")
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
@@ -188,8 +196,8 @@ class InvestmentApp:
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
 
     def estimate_today_investment(self):
-        if not self.is_logged_in:
-            return "请先登录PushPlus"
+        # if not self.is_logged_in:
+        #     return "请先登录PushPlus"
 
         try:
             # 在 CLI 模式下使用默认 ticker
@@ -314,9 +322,9 @@ class InvestmentApp:
             json.dump(history, f, indent=4)
 
     def show_investment_input_dialog(self):
-        if not self.investment_tracker:
-            messagebox.showerror("错误", "请先登录PushPlus")
-            return
+        # if not self.investment_tracker:
+        #     messagebox.showerror("错误", "请先登录PushPlus")
+        #     return
 
         dialog = tk.Toplevel(self.master)
         dialog.title("输入投资信息")
@@ -353,6 +361,13 @@ class InvestmentApp:
 
     def pushplus_login(self, cli_token=None):
         token = cli_token or self.pushplus_token
+
+        # 如果当前已登录，执行退出登录操作
+        if self.is_logged_in:
+            self.logout()
+            return False
+
+        # 未登录状态，处理登录操作
         if not token:
             if self.master:
                 token = tk.simpledialog.askstring(
@@ -381,7 +396,7 @@ class InvestmentApp:
 
             if test_result:
                 self.pushplus_token = token
-                self.is_logged_in = True  # 确保设置登录状态
+                self.is_logged_in = True
                 self.save_token(token)
                 if self.master:
                     self.login_button.config(text="退出登录")
@@ -390,21 +405,45 @@ class InvestmentApp:
                     print(f"PushPlus登录成功！\n测试消息发送时间：{time_str}")
                 return True
             else:
-                self.pushplus_sender = None
-                self.pushplus_token = None
-                self.is_logged_in = False
-                self.investment_tracker = None
+                self.logout()
                 if self.master:
-                    self.login_button.config(text="PushPlus登录")
                     messagebox.showerror("登录失败", "PushPlus登录失败，请检查您的Token。")
                 else:
                     print("PushPlus登录失败，请检查您的Token。")
                 return False
         return False
 
+    def logout(self):
+        """退出登录并清理相关状态"""
+        # 清理对象状态
+        self.pushplus_sender = None
+        self.pushplus_token = None
+        self.is_logged_in = False
+        self.investment_tracker = None
+
+        # 停止提醒（如果正在运行）
+        if self.reminder_thread and self.reminder_thread.is_alive():
+            self.stop_reminder()
+
+        # 删除token文件
+        if os.path.exists(self.token_file):
+            try:
+                os.remove(self.token_file)
+            except Exception as e:
+                print(f"删除token文件时出错: {str(e)}")
+
+        # 更新GUI状态
+        if self.master:
+            self.login_button.config(text="PushPlus登录")
+            self.reminder_button.config(text="启动提醒")  # 重置提醒按钮状态
+            messagebox.showinfo("退出登录", "已成功退出PushPlus登录")
+        else:
+            print("已退出PushPlus登录")
+
     def destroy(self):
-        if self.pushplus_token:
-            self.save_token(self.pushplus_token)
+        """关闭程序时的清理操作"""
+        if self.is_logged_in:
+            self.save_token(self.pushplus_token)  # 仅在登录状态下保存token
         self.master.destroy()
 
     def check_login(self):
@@ -439,8 +478,8 @@ class InvestmentApp:
         self.base_investment_entry.insert(0, str(self.config['base_investment']))
 
     def update_plot(self):
-        if not self.check_login():
-            return
+        # if not self.check_login():
+        #     return
         ticker = self.ticker_var.get()
         try:
             start_date = datetime.strptime(self.start_date_entry.get(), "%Y-%m").date()
@@ -483,6 +522,13 @@ class InvestmentApp:
             traceback.print_exc()
 
     def toggle_reminder(self):
+        if not self.is_logged_in:  # 保留 PushPlus 登录检查
+            if self.master:
+                messagebox.showerror("错误", "请先登录PushPlus")
+            else:
+                print("错误: 请先登录PushPlus")
+            return
+
         if self.reminder_thread is None or not self.reminder_thread.is_alive():
             self.start_reminder()
         else:
@@ -1008,8 +1054,8 @@ class InvestmentApp:
             return False
 
     def analyze_and_plot(self, ticker, start_date, end_date):
-        if not self.check_login():
-            return None
+        # if not self.check_login():
+        #     return None
 
         # 检查网络连接
         if not self.check_internet_connection():
@@ -1112,7 +1158,6 @@ class InvestmentApp:
         ax1.plot(daily_data.index, daily_data['weighted_cumulative_return'],
                  label=f'{ticker} 加权累计收益', color='blue')
 
-        # 在 analyze_and_plot 方法中，修改这部分代码
         portfolio_returns = None
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
