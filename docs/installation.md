@@ -38,19 +38,6 @@
 
 完整的依赖列表请参见 `requirements.txt` 文件。
 
-## 配置说明
-
-1. 创建配置文件：
-   ```bash
-   cp config.example.yml config.yml
-   ```
-
-2. 编辑配置文件，设置您的个人参数：
-   - API密钥（如适用）
-   - 默认数据存储位置
-   - 时区设置
-   - PushPlus token（如需使用推送功能）
-
 ## 常见问题
 
 1. **依赖安装失败**
