@@ -42,8 +42,8 @@ class InvestmentApp:
         self.investment_tracker = None
         self.is_logged_in = False
         self.setup_logger()
-        # 设置中文字体
-        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
+        self.setup_chinese_font()
+
         plt.rcParams['axes.unicode_minus'] = False
 
         # 配置
@@ -1233,6 +1233,30 @@ class InvestmentApp:
 
         plt.tight_layout()
         return fig
+
+    def setup_chinese_font(self):
+        """
+            根据操作系统设置合适的中文字体
+        """
+        import platform
+        system = platform.system()
+
+        # 根据操作系统选择字体
+        if system == 'Windows':
+            font = 'Microsoft YaHei'
+        elif system == 'Darwin':  # MacOS
+            font = 'PingFang SC'
+        elif system == 'Linux':
+            font = 'WenQuanYi Micro Hei'
+        else:
+            font = 'Arial Unicode MS'
+
+        # 设置matplotlib字体
+        plt.rcParams['font.sans-serif'] = [font]
+        plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+
+        print(f"当前操作系统: {system}")
+        print(f"使用字体: {font}")
 
 
 def parse_arguments():
