@@ -21,6 +21,8 @@ import time
 from datetime import datetime, timedelta, date, time as datetime_time
 import schedule
 
+from matplotlib import font_manager
+
 # 在文件顶部添加这个打印语句，以确认导入成功
 print("All modules imported successfully, including time module")
 
@@ -1234,6 +1236,7 @@ class InvestmentApp:
         plt.tight_layout()
         return fig
 
+    
     def setup_chinese_font(self):
         """
             根据操作系统设置合适的中文字体
@@ -1244,9 +1247,25 @@ class InvestmentApp:
         # 根据操作系统选择字体
         if system == 'Windows':
             font = 'Microsoft YaHei'
+            fonts = [font]
         elif system == 'Darwin':  # MacOS
+
+            
+            # 取消这段注释，可以打印出系统字体名称列表
+            #debug_to_display_system_fonts = """
+            print(f"---- 系统字体列表: ----- ")
+            for font_path in font_manager.findSystemFonts(fontpaths=None, fontext='ttf'):
+                try:
+                    font_prop = font_manager.FontProperties(fname=font_path)
+                    font_name = font_prop.get_name()
+                    print(f"font_path: {font_path}, font_name: {font_name}")
+                except RuntimeError:
+                    print(f"无法加载字体: {font_path}")
+                    #"""
+                
             # Mac系统字体优先级
-            mac_fonts = [
+            fonts = [
+                'PingFang HK',
                 'PingFang SC',
                 'Hiragino Sans GB',
                 'STHeiti',
@@ -1255,18 +1274,20 @@ class InvestmentApp:
                 'Songti SC'
             ]
             # 选择第一个可用的字体
-            font = next((f for f in mac_fonts), 'Arial Unicode MS')
+            #font = next((f for f in mac_fonts), 'Arial Unicode MS')
         elif system == 'Linux':
             font = 'WenQuanYi Micro Hei'
+            fonts = [font]
         else:
             font = 'Arial Unicode MS'
+            fonts = [font]
 
         # 设置matplotlib字体
-        plt.rcParams['font.sans-serif'] = [font]
+        plt.rcParams['font.sans-serif'] = fonts
         plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
 
         print(f"当前操作系统: {system}")
-        print(f"使用字体: {font}")
+        #print(f"使用字体: {font}")
 
 
 def parse_arguments():
