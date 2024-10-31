@@ -48,7 +48,7 @@ class InvestmentApp:
 
         # 配置
         self.config = {
-            'tickers': ['VOO', 'QQQ', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'TLT', 'IEI','BND','DBC','GLD'],
+            'tickers': ['VOO', 'QQQ', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'TLT', 'IEI','BND','DBC','GLD', 'XLV','NVDA'],
             'base_investment': 4000,
             'sma_window': 200,
             'std_window': 30,
@@ -1245,7 +1245,17 @@ class InvestmentApp:
         if system == 'Windows':
             font = 'Microsoft YaHei'
         elif system == 'Darwin':  # MacOS
-            font = 'PingFang SC'
+            # Mac系统字体优先级
+            mac_fonts = [
+                'PingFang SC',
+                'Hiragino Sans GB',
+                'STHeiti',
+                'Heiti SC',
+                'STSong',
+                'Songti SC'
+            ]
+            # 选择第一个可用的字体
+            font = next((f for f in mac_fonts), 'Arial Unicode MS')
         elif system == 'Linux':
             font = 'WenQuanYi Micro Hei'
         else:
