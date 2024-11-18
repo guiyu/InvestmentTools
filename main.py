@@ -14,12 +14,14 @@ import threading
 import pytz
 import logging
 from AssetAllocationDialog import AssetAllocationDialog
+from RebalanceManager import RebalanceManager, RebalancePeriod
 from pushplus_sender import PushPlusSender
 from investment_tracker import InvestmentTracker
 import requests
 import time
 from datetime import datetime, timedelta, date, time as datetime_time
 import schedule
+from typing import Dict, Any, Optional, List, Tuple, Union
 
 from matplotlib import font_manager
 
@@ -94,6 +96,24 @@ class InvestmentApp:
         # 在 GUI 初始化之后尝试自动登录
         if self.pushplus_token:
             self.auto_login()
+
+            # 添加再平衡相关的属性
+            self.rebalance_manager = RebalanceManager()
+            self.rebalance_config = {
+                'enabled': False,
+                'period': None,
+                'threshold': 0.05,
+                'min_trade_amount': 100,
+                'last_rebalance_date': None
+            }
+
+            # 添加再平衡GUI组件的属性
+            self.rebalance_frame = None
+            self.rebalance_enabled_var = None
+            self.rebalance_period_var = None
+            self.threshold_var = None
+            self.min_trade_var = None
+            self.rebalance_history_window = None
 
     def init_gui(self):
         self.master.title("投资策略分析")
@@ -196,6 +216,400 @@ class InvestmentApp:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_frame)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+        # 添加再平衡设置框架
+        self.create_rebalance_frame()
+
+    def create_rebalance_frame(self):
+        """创建再平衡设置框架"""
+        # 创建再平衡设置的主框架
+        self.rebalance_frame = ttk.LabelFrame(self.left_frame, text="再平衡设置", padding=10)
+        self.rebalance_frame.pack(fill='x', pady=10, padx=5)
+
+        # 启用/禁用再平衡的复选框
+        self.rebalance_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.rebalance_frame,
+                        text="启用再平衡",
+                        variable=self.rebalance_enabled_var,
+                        command=self.toggle_rebalance).pack(anchor='w', pady=(0, 10))
+
+        # 再平衡周期选择
+        period_frame = ttk.Frame(self.rebalance_frame)
+        period_frame.pack(fill='x', pady=5)
+
+        ttk.Label(period_frame, text="再平衡周期:").pack(side='left')
+
+        self.rebalance_period_var = tk.StringVar(value=RebalancePeriod.QUARTERLY.value)
+
+        period_options = [
+            ("月度", RebalancePeriod.MONTHLY.value),
+            ("季度", RebalancePeriod.QUARTERLY.value),
+            ("半年", RebalancePeriod.SEMIANNUAL.value),
+            ("年度", RebalancePeriod.ANNUAL.value)
+        ]
+
+        radio_frame = ttk.Frame(self.rebalance_frame)
+        radio_frame.pack(fill='x', pady=5)
+
+        for text, value in period_options:
+            ttk.Radiobutton(radio_frame,
+                            text=text,
+                            value=value,
+                            variable=self.rebalance_period_var,
+                            command=self.update_rebalance_period).pack(side='left', padx=5)
+
+        # 再平衡阈值设置
+        threshold_frame = ttk.Frame(self.rebalance_frame)
+        threshold_frame.pack(fill='x', pady=5)
+
+        ttk.Label(threshold_frame, text="再平衡阈值 (%):").pack(side='left')
+
+        self.threshold_var = tk.StringVar(value="5")
+        threshold_entry = ttk.Entry(threshold_frame,
+                                    textvariable=self.threshold_var,
+                                    width=8)
+        threshold_entry.pack(side='left', padx=5)
+
+        # 最小交易金额设置
+        min_trade_frame = ttk.Frame(self.rebalance_frame)
+        min_trade_frame.pack(fill='x', pady=5)
+
+        ttk.Label(min_trade_frame, text="最小交易金额 ($):").pack(side='left')
+
+        self.min_trade_var = tk.StringVar(value="100")
+        min_trade_entry = ttk.Entry(min_trade_frame,
+                                    textvariable=self.min_trade_var,
+                                    width=8)
+        min_trade_entry.pack(side='left', padx=5)
+
+        # 功能按钮
+        button_frame = ttk.Frame(self.rebalance_frame)
+        button_frame.pack(fill='x', pady=10)
+
+        ttk.Button(button_frame,
+                   text="查看再平衡历史",
+                   command=self.show_rebalance_history).pack(side='left', padx=5)
+
+        ttk.Button(button_frame,
+                   text="导出再平衡报告",
+                   command=self.export_rebalance_report).pack(side='left', padx=5)
+
+        # 显示下次再平衡日期
+        self.next_rebalance_label = ttk.Label(self.rebalance_frame,
+                                              text="下次再平衡日期: 未设置")
+        self.next_rebalance_label.pack(anchor='w', pady=5)
+
+    def update_next_rebalance_date(self):
+        """更新显示下次再平衡日期"""
+        if not self.rebalance_config['enabled']:
+            self.next_rebalance_label.config(text="下次再平衡日期: 未启用")
+            return
+
+        next_date = self.rebalance_manager.get_next_rebalance_date(datetime.now())
+        if next_date:
+            self.next_rebalance_label.config(
+                text=f"下次再平衡日期: {next_date.strftime('%Y-%m-%d')}")
+        else:
+            self.next_rebalance_label.config(text="下次再平衡日期: 未设置")
+
+    def toggle_rebalance(self):
+        """启用/禁用再平衡功能"""
+        enabled = self.rebalance_enabled_var.get()
+        self.rebalance_config['enabled'] = enabled
+
+        try:
+            if enabled:
+                # 验证并更新配置
+                threshold = float(self.threshold_var.get()) / 100
+                min_trade = float(self.min_trade_var.get())
+
+                if not (0 < threshold < 1):
+                    raise ValueError("再平衡阈值必须在0-100之间")
+                if min_trade <= 0:
+                    raise ValueError("最小交易金额必须大于0")
+
+                # 更新再平衡管理器配置
+                self.rebalance_config.update({
+                    'threshold': threshold,
+                    'min_trade_amount': min_trade
+                })
+
+                self.rebalance_manager.threshold = threshold
+                self.rebalance_manager.min_trade_amount = min_trade
+
+                # 设置再平衡周期
+                period = RebalancePeriod(self.rebalance_period_var.get())
+                self.rebalance_manager.set_rebalance_period(period)
+
+                # 如果有资产组合配置，设置目标配置
+                if self.portfolio_allocations:
+                    self.rebalance_manager.set_target_allocations(
+                        self.portfolio_allocations)
+                else:
+                    raise ValueError("请先设置资产组合配置")
+
+                messagebox.showinfo("成功", "再平衡功能已启用")
+                self.update_next_rebalance_date()
+
+            else:
+                messagebox.showinfo("提示", "再平衡功能已禁用")
+                self.update_next_rebalance_date()
+
+        except ValueError as e:
+            self.rebalance_enabled_var.set(False)
+            self.rebalance_config['enabled'] = False
+            messagebox.showerror("错误", str(e))
+
+        except Exception as e:
+            self.rebalance_enabled_var.set(False)
+            self.rebalance_config['enabled'] = False
+            messagebox.showerror("错误", f"启用再平衡功能时发生错误: {str(e)}")
+
+    def update_rebalance_period(self):
+        """更新再平衡周期"""
+        if not self.rebalance_config['enabled']:
+            return
+
+        try:
+            period = RebalancePeriod(self.rebalance_period_var.get())
+            self.rebalance_manager.set_rebalance_period(period)
+            self.update_next_rebalance_date()
+            messagebox.showinfo("成功", f"再平衡周期已更新为: {period.value}")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"更新再平衡周期时发生错误: {str(e)}")
+
+    def show_rebalance_history(self):
+        """显示再平衡历史记录"""
+        if self.rebalance_history_window is not None:
+            self.rebalance_history_window.destroy()
+
+        self.rebalance_history_window = tk.Toplevel(self.master)
+        self.rebalance_history_window.title("再平衡历史记录")
+        self.rebalance_history_window.geometry("800x600")
+
+        # 创建主框架
+        main_frame = ttk.Frame(self.rebalance_history_window, padding=10)
+        main_frame.pack(fill='both', expand=True)
+
+        # 创建Treeview来显示历史记录
+        columns = ('日期', '状态', '交易数量', '调整金额')
+        tree = ttk.Treeview(main_frame, columns=columns, show='headings')
+
+        # 设置列头
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=100)
+
+        # 添加滚动条
+        scrollbar = ttk.Scrollbar(main_frame, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        # 放置组件
+        tree.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        # 添加历史记录
+        history = self.rebalance_manager.get_rebalance_history()
+        for record in history:
+            date = record['date'].strftime('%Y-%m-%d')
+            status = record['status']
+            trades_count = len(record['trades']['shares']) if record['status'] == 'success' else 0
+            total_amount = sum(abs(amt) for amt in record['trades']['amounts'].values()) if record[
+                                                                                                'status'] == 'success' else 0
+
+            tree.insert('', 'end', values=(date, status, trades_count, f"${total_amount:.2f}"))
+
+        # 添加详情显示框
+        detail_frame = ttk.LabelFrame(main_frame, text="详细信息", padding=10)
+        detail_frame.pack(fill='both', expand=True, pady=10)
+
+        detail_text = tk.Text(detail_frame, wrap=tk.WORD, height=10)
+        detail_text.pack(fill='both', expand=True)
+
+        def show_details(event):
+            item = tree.selection()[0]
+            values = tree.item(item)['values']
+            date = values[0]
+
+            # 查找对应的历史记录
+            record = next((r for r in history if r['date'].strftime('%Y-%m-%d') == date), None)
+            if record:
+                detail_text.delete('1.0', tk.END)
+                detail_text.insert('1.0', self.rebalance_manager.generate_rebalance_report(record))
+
+        tree.bind('<<TreeviewSelect>>', show_details)
+
+    def export_rebalance_report(self):
+        """导出再平衡报告"""
+        try:
+            from datetime import datetime
+            import os
+
+            # 创建报告目录
+            report_dir = 'reports'
+            if not os.path.exists(report_dir):
+                os.makedirs(report_dir)
+
+            # 生成报告文件名
+            filename = f"rebalance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            filepath = os.path.join(report_dir, filename)
+
+            # 获取历史记录
+            history = self.rebalance_manager.get_rebalance_history()
+
+            # 生成报告内容
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write("投资组合再平衡报告\n")
+                f.write("=" * 50 + "\n\n")
+
+                # 写入基本信息
+                f.write("基本信息:\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"再平衡周期: {self.rebalance_manager.rebalance_period.value}\n")
+                f.write(f"触发阈值: {self.rebalance_manager.threshold:.2%}\n")
+                f.write(f"最小交易金额: ${self.rebalance_manager.min_trade_amount:.2f}\n\n")
+
+                # 写入目标配置
+                f.write("目标资产配置:\n")
+                f.write("-" * 30 + "\n")
+                for ticker, weight in self.rebalance_manager.target_allocations.items():
+                    f.write(f"{ticker}: {weight:.2%}\n")
+                f.write("\n")
+
+                # 写入历史记录
+                f.write("再平衡历史记录:\n")
+                f.write("-" * 30 + "\n")
+                for record in history:
+                    f.write(self.rebalance_manager.generate_rebalance_report(record))
+                    f.write("\n" + "=" * 50 + "\n\n")
+
+                # 写入性能统计
+                metrics = self.rebalance_manager.get_performance_metrics()
+                f.write("性能统计:\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"总再平衡次数: {metrics['rebalance_count']}\n")
+                f.write(f"总交易次数: {metrics['total_trades']}\n")
+
+            messagebox.showinfo("成功", f"报告已导出到: {filepath}")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"导出报告时发生错误: {str(e)}")
+
+    def check_and_execute_rebalance(self, current_date: datetime) -> Optional[Dict[str, Any]]:
+        """
+        检查并执行再平衡操作
+
+        Args:
+            current_date: 当前日期
+
+        Returns:
+            再平衡执行结果（如果执行）
+        """
+        if not self.rebalance_config['enabled']:
+            return None
+
+        try:
+            # 获取当前价格
+            prices = {}
+            for ticker in self.portfolio_allocations.keys():
+                try:
+                    stock = yf.Ticker(ticker)
+                    prices[ticker] = stock.history(period='1d')['Close'].iloc[-1]
+                except Exception as e:
+                    self.logger.error(f"获取{ticker}价格时发生错误: {str(e)}")
+                    continue
+
+            if not prices:
+                raise ValueError("无法获取任何股票的价格数据")
+
+            # 更新当前持仓
+            current_holdings = self.get_current_holdings()
+            self.rebalance_manager.update_current_holdings(current_holdings)
+
+            # 执行再平衡
+            result = self.rebalance_manager.execute_rebalance(current_date, prices)
+
+            if result['status'] == 'success':
+                # 更新投资组合数据
+                self.update_portfolio_after_rebalance(result)
+
+                # 显示执行结果
+                if self.master:  # GUI模式
+                    report = self.rebalance_manager.generate_rebalance_report(result)
+                    messagebox.showinfo("再平衡执行成功", report)
+                else:  # CLI模式
+                    print(self.rebalance_manager.generate_rebalance_report(result))
+
+            return result
+
+        except Exception as e:
+            error_msg = f"执行再平衡时发生错误: {str(e)}"
+            if self.master:
+                messagebox.showerror("错误", error_msg)
+            else:
+                print(error_msg)
+            return None
+
+    def update_portfolio_after_rebalance(self, rebalance_result: Dict[str, Any]):
+        """
+        根据再平衡结果更新投资组合数据
+
+        Args:
+            rebalance_result: 再平衡执行结果
+        """
+        if not hasattr(self, 'portfolio_data'):
+            return
+
+        try:
+            execution_date = rebalance_result['date']
+            trades = rebalance_result['trades']['shares']
+
+            # 更新持仓数据
+            for ticker, shares in trades.items():
+                col_name = f'{ticker}_Shares'
+                if col_name in self.portfolio_data.columns:
+                    self.portfolio_data.loc[execution_date:, col_name] += shares
+
+            # 重新计算投资组合价值和其他指标
+            self.recalculate_portfolio_metrics(execution_date)
+
+        except Exception as e:
+            self.logger.error(f"更新投资组合数据时发生错误: {str(e)}")
+
+    def recalculate_portfolio_metrics(self, from_date: datetime):
+        """
+        重新计算投资组合指标
+
+        Args:
+            from_date: 开始日期
+        """
+        try:
+            # 获取最新价格数据
+            prices = pd.DataFrame()
+            for ticker in self.portfolio_allocations.keys():
+                prices[ticker] = yf.download(ticker, from_date, progress=False)['Adj Close']
+
+            # 更新投资组合价值
+            portfolio_value = pd.Series(0.0, index=prices.index)
+            for ticker in self.portfolio_allocations.keys():
+                shares_col = f'{ticker}_Shares'
+                if shares_col in self.portfolio_data.columns:
+                    shares = self.portfolio_data[shares_col].reindex(prices.index).fillna(method='ffill')
+                    portfolio_value += shares * prices[ticker]
+
+            self.portfolio_data.loc[prices.index, 'Portfolio_Value'] = portfolio_value
+
+            # 更新其他指标...
+            self.portfolio_data.loc[prices.index, 'Portfolio_Return'] = \
+                self.portfolio_data['Portfolio_Value'] - self.portfolio_data['Portfolio_Cost']
+
+            # 触发图表更新
+            self.update_plot()
+
+        except Exception as e:
+            self.logger.error(f"重新计算投资组合指标时发生错误: {str(e)}")
 
     def estimate_today_investment(self):
         # if not self.is_logged_in:
