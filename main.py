@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import traceback
+
 import yfinance as yf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -45,14 +47,17 @@ class InvestmentApp:
         self.pushplus_sender = None
         self.investment_tracker = None
         self.is_logged_in = False
+
+        # 设置日志
         self.setup_logger()
         self.setup_chinese_font()
 
         plt.rcParams['axes.unicode_minus'] = False
 
-        # 配置
+        # 初始化配置
         self.config = {
-            'tickers': ['VOO', 'QQQ', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'TLT', 'IEI','BND','DBC','GLD', 'XLV','NVDA'],
+            'tickers': ['VOO', 'QQQ', 'SPLG', 'RSP', 'VTI', 'VTV', 'SCHD', 'VGT', 'TLT', 'IEI', 'BND', 'DBC', 'GLD',
+                        'XLV', 'NVDA'],
             'base_investment': 4000,
             'sma_window': 200,
             'std_window': 30,
@@ -63,19 +68,57 @@ class InvestmentApp:
             'macd_signal_window': 9,
         }
 
+        # 初始化投资组合配置
         self.portfolio_allocations = {}
 
-        self.pushplus_sender = None
-        self.reminder_thread = None
-        self.stop_flag = threading.Event()
-        self.bot = None
+        # 初始化再平衡管理器和配置
+        self.rebalance_manager = RebalanceManager()
+        self.rebalance_config = {
+            'enabled': False,
+            'period': None,
+            'threshold': 0.05,
+            'min_trade_amount': 1000,
+            'last_rebalance_date': None
+        }
 
-        # GUI 相关的属性初始化为 None
+        # 初始化UI变量
+        self.init_ui_variables()
+
+        # GUI相关的属性初始化
+        self.init_gui_attributes()
+
+        # 初始化GUI（如果在GUI模式下）
+        if self.master is not None:
+            self.init_gui()
+
+        # 尝试自动登录
+        if self.pushplus_token:
+            self.auto_login()
+
+    def init_ui_variables(self):
+        """初始化所有UI相关的变量"""
+        # 再平衡相关变量
+        self.rebalance_enabled_var = tk.BooleanVar(value=False)
+        self.rebalance_period_var = tk.StringVar(value=RebalancePeriod.QUARTERLY.value)
+        self.threshold_var = tk.StringVar(value="10")
+        self.min_trade_var = tk.StringVar(value="2000")
+
+        # 其他UI变量
+        self.ticker_var = tk.StringVar()
+        if self.config['tickers']:
+            self.ticker_var.set(self.config['tickers'][0])
+
+    def init_gui_attributes(self):
+        """初始化所有GUI相关的属性为None"""
+        # 主框架
         self.left_frame = None
         self.right_frame = None
+
+        # 日期输入
         self.start_date_entry = None
         self.end_date_entry = None
-        self.ticker_var = None
+
+        # 下拉菜单和按钮
         self.ticker_dropdown = None
         self.base_investment_entry = None
         self.update_button = None
@@ -83,37 +126,18 @@ class InvestmentApp:
         self.login_button = None
         self.input_investment_button = None
         self.reminder_button = None
+
+        # 图表相关
         self.fig = None
         self.ax1 = None
         self.ax2 = None
         self.canvas = None
         self.canvas_widget = None
 
-        # 只在 GUI 模式下初始化窗口和组件
-        if self.master is not None:
-            self.init_gui()
-
-        # 在 GUI 初始化之后尝试自动登录
-        if self.pushplus_token:
-            self.auto_login()
-
-            # 添加再平衡相关的属性
-            self.rebalance_manager = RebalanceManager()
-            self.rebalance_config = {
-                'enabled': False,
-                'period': None,
-                'threshold': 0.05,
-                'min_trade_amount': 100,
-                'last_rebalance_date': None
-            }
-
-            # 添加再平衡GUI组件的属性
-            self.rebalance_frame = None
-            self.rebalance_enabled_var = None
-            self.rebalance_period_var = None
-            self.threshold_var = None
-            self.min_trade_var = None
-            self.rebalance_history_window = None
+        # 再平衡相关
+        self.rebalance_frame = None
+        self.next_rebalance_label = None
+        self.rebalance_history_window = None
 
     def init_gui(self):
         self.master.title("投资策略分析")
@@ -227,7 +251,6 @@ class InvestmentApp:
         self.rebalance_frame.pack(fill='x', pady=10, padx=5)
 
         # 启用/禁用再平衡的复选框
-        self.rebalance_enabled_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.rebalance_frame,
                         text="启用再平衡",
                         variable=self.rebalance_enabled_var,
@@ -238,8 +261,6 @@ class InvestmentApp:
         period_frame.pack(fill='x', pady=5)
 
         ttk.Label(period_frame, text="再平衡周期:").pack(side='left')
-
-        self.rebalance_period_var = tk.StringVar(value=RebalancePeriod.QUARTERLY.value)
 
         period_options = [
             ("月度", RebalancePeriod.MONTHLY.value),
@@ -263,24 +284,23 @@ class InvestmentApp:
         threshold_frame.pack(fill='x', pady=5)
 
         ttk.Label(threshold_frame, text="再平衡阈值 (%):").pack(side='left')
-
-        self.threshold_var = tk.StringVar(value="5")
-        threshold_entry = ttk.Entry(threshold_frame,
-                                    textvariable=self.threshold_var,
-                                    width=8)
-        threshold_entry.pack(side='left', padx=5)
+        ttk.Entry(threshold_frame,
+                  textvariable=self.threshold_var,
+                  width=8).pack(side='left', padx=5)
 
         # 最小交易金额设置
         min_trade_frame = ttk.Frame(self.rebalance_frame)
         min_trade_frame.pack(fill='x', pady=5)
 
         ttk.Label(min_trade_frame, text="最小交易金额 ($):").pack(side='left')
+        ttk.Entry(min_trade_frame,
+                  textvariable=self.min_trade_var,
+                  width=8).pack(side='left', padx=5)
 
-        self.min_trade_var = tk.StringVar(value="100")
-        min_trade_entry = ttk.Entry(min_trade_frame,
-                                    textvariable=self.min_trade_var,
-                                    width=8)
-        min_trade_entry.pack(side='left', padx=5)
+        # 显示下次再平衡日期
+        self.next_rebalance_label = ttk.Label(self.rebalance_frame,
+                                              text="下次再平衡日期: 未设置")
+        self.next_rebalance_label.pack(anchor='w', pady=5)
 
         # 功能按钮
         button_frame = ttk.Frame(self.rebalance_frame)
@@ -293,11 +313,6 @@ class InvestmentApp:
         ttk.Button(button_frame,
                    text="导出再平衡报告",
                    command=self.export_rebalance_report).pack(side='left', padx=5)
-
-        # 显示下次再平衡日期
-        self.next_rebalance_label = ttk.Label(self.rebalance_frame,
-                                              text="下次再平衡日期: 未设置")
-        self.next_rebalance_label.pack(anchor='w', pady=5)
 
     def update_next_rebalance_date(self):
         """更新显示下次再平衡日期"""
@@ -313,7 +328,7 @@ class InvestmentApp:
             self.next_rebalance_label.config(text="下次再平衡日期: 未设置")
 
     def toggle_rebalance(self):
-        """启用/禁用再平衡功能"""
+        """启用/禁用再平衡功能并更新投资组合数据"""
         enabled = self.rebalance_enabled_var.get()
         self.rebalance_config['enabled'] = enabled
 
@@ -341,18 +356,23 @@ class InvestmentApp:
                 period = RebalancePeriod(self.rebalance_period_var.get())
                 self.rebalance_manager.set_rebalance_period(period)
 
-                # 如果有资产组合配置，设置目标配置
-                if self.portfolio_allocations:
-                    self.rebalance_manager.set_target_allocations(
-                        self.portfolio_allocations)
-                else:
+                # 检查是否有资产组合配置
+                if not self.portfolio_allocations:
                     raise ValueError("请先设置资产组合配置")
 
-                messagebox.showinfo("成功", "再平衡功能已启用")
+                # 设置目标配置并初始化再平衡管理器
+                self.rebalance_manager.set_target_allocations(self.portfolio_allocations)
+
+                # 重新计算投资组合数据
+                self.recalculate_portfolio_with_rebalance()
+
+                messagebox.showinfo("成功", "再平衡功能已启用，投资组合数据已更新")
                 self.update_next_rebalance_date()
 
             else:
-                messagebox.showinfo("提示", "再平衡功能已禁用")
+                # 禁用再平衡时，重新计算原始投资组合数据
+                self.recalculate_portfolio_without_rebalance()
+                messagebox.showinfo("提示", "再平衡功能已禁用，投资组合数据已恢复")
                 self.update_next_rebalance_date()
 
         except ValueError as e:
@@ -364,6 +384,157 @@ class InvestmentApp:
             self.rebalance_enabled_var.set(False)
             self.rebalance_config['enabled'] = False
             messagebox.showerror("错误", f"启用再平衡功能时发生错误: {str(e)}")
+
+    def recalculate_portfolio_with_rebalance(self):
+        """重新计算启用再平衡后的投资组合数据"""
+        try:
+            if not hasattr(self, 'start_date') or not hasattr(self, 'end_date'):
+                self.start_date = datetime.strptime(self.start_date_entry.get(), "%Y-%m").date()
+                self.end_date = datetime.strptime(self.end_date_entry.get(), "%Y-%m").date()
+                self.end_date = (date(self.end_date.year, self.end_date.month, 1) + timedelta(days=32)).replace(
+                    day=1) - timedelta(days=1)
+
+            # 转换日期为 Timestamp
+            start_ts = pd.Timestamp(self.start_date)
+            end_ts = pd.Timestamp(self.end_date)
+
+            # 获取所有需要的价格数据
+            data = pd.DataFrame()
+            for ticker in self.portfolio_allocations.keys():
+                ticker_data = yf.download(ticker, start=start_ts, end=end_ts)['Adj Close']
+                data[ticker] = ticker_data
+
+            # 获取投资日期列表
+            investment_dates = self.get_investment_dates(start_ts, end_ts, data.index)
+
+            # 初始化投资组合数据
+            self.portfolio_data = pd.DataFrame(index=data.index)
+
+            # 初始化基本列
+            self.portfolio_data['Portfolio_Value'] = 0.0
+            self.portfolio_data['Portfolio_Cost'] = 0.0
+
+            # 为每个资产初始化Shares和Cost列
+            for ticker in self.portfolio_allocations:
+                self.logger.info(f"为 {ticker} 创建份额和成本列")
+                self.portfolio_data[f'{ticker}_Shares'] = 0.0
+                self.portfolio_data[f'{ticker}_Cost'] = 0.0
+
+            # 对每个投资日期进行循环
+            cumulative_investment = 0.0
+            for date_val in investment_dates:
+                # 确保日期格式统一
+                current_date = pd.Timestamp(date_val)
+
+                # 记录当前处理的日期
+                self.logger.info(f"处理投资日期: {current_date}")
+
+                # 获取当日价格
+                current_prices = {ticker: data.loc[current_date, ticker]
+                                  for ticker in self.portfolio_allocations}
+
+                # 执行定投逻辑
+                total_investment = self.config['base_investment']
+                for ticker, weight in self.portfolio_allocations.items():
+                    if weight > 0:  # 只处理权重大于0的资产
+                        allocation = total_investment * weight
+                        price = current_prices[ticker]
+                        shares = allocation / price
+
+                        # 更新持仓
+                        self.portfolio_data.loc[current_date:, f'{ticker}_Shares'] += shares
+                        self.portfolio_data.loc[current_date:, f'{ticker}_Cost'] += allocation
+
+                cumulative_investment += total_investment
+                self.portfolio_data.loc[current_date:, 'Portfolio_Cost'] = cumulative_investment
+
+                # 验证列是否存在
+                for ticker in self.portfolio_allocations:
+                    if f'{ticker}_Shares' not in self.portfolio_data.columns:
+                        raise ValueError(f"列 {ticker}_Shares 不存在于 portfolio_data 中")
+
+                if self.rebalance_config['enabled']:
+                    current_holdings = {
+                        ticker: self.portfolio_data.loc[current_date, f'{ticker}_Shares']
+                        for ticker in self.portfolio_allocations if self.portfolio_allocations[ticker] > 0
+                    }
+                    self.rebalance_manager.update_current_holdings(current_holdings)
+
+                    result = self.rebalance_manager.execute_rebalance(
+                        current_date.to_pydatetime(),
+                        current_prices
+                    )
+
+                    if result['status'] == 'success':
+                        for ticker, shares in result['trades']['shares'].items():
+                            self.portfolio_data.loc[current_date:, f'{ticker}_Shares'] += shares
+
+            # 计算每日组合价值
+            for date in data.index:
+                portfolio_value = 0.0
+                for ticker in self.portfolio_allocations:
+                    if self.portfolio_allocations[ticker] > 0:  # 只计算有权重的资产
+                        shares = self.portfolio_data.loc[date, f'{ticker}_Shares']
+                        price = data.loc[date, ticker]
+                        portfolio_value += shares * price
+                self.portfolio_data.loc[date, 'Portfolio_Value'] = portfolio_value
+
+            # 计算收益
+            self.portfolio_data['Portfolio_Return'] = \
+                self.portfolio_data['Portfolio_Value'] - self.portfolio_data['Portfolio_Cost']
+
+            # 更新图表
+            self.update_plot()
+
+        except Exception as e:
+            self.logger.error(f"重新计算投资组合数据时发生错误: {str(e)}")
+            if hasattr(self, 'portfolio_data'):
+                self.logger.error(f"portfolio_data columns: {self.portfolio_data.columns.tolist()}")
+            self.logger.error(f"portfolio_allocations: {self.portfolio_allocations}")
+
+            # 输出错误发生的具体位置
+            tb = traceback.extract_tb(e.__traceback__)
+            self.logger.error(f"错误位置: {tb[-1].filename}, 行号: {tb[-1].lineno}")
+            self.logger.error(f"错误代码: {tb[-1].line}")
+
+            messagebox.showerror("错误", f"重新计算投资组合数据时发生错误: {str(e)}")
+
+    def update_portfolio_values(self, data):
+        """更新投资组合价值和收益"""
+        for date in data.index:
+            portfolio_value = 0.0
+            for ticker in self.portfolio_allocations:
+                shares = self.portfolio_data.loc[date, f'{ticker}_Shares']
+                price = data.loc[date, ticker]
+                portfolio_value += shares * price
+            self.portfolio_data.loc[date, 'Portfolio_Value'] = portfolio_value
+
+        # 计算收益
+        self.portfolio_data['Portfolio_Return'] = \
+            self.portfolio_data['Portfolio_Value'] - self.portfolio_data['Portfolio_Cost']
+
+        # 更新图表
+        self.update_plot()
+
+    def recalculate_portfolio_without_rebalance(self):
+        """重新计算禁用再平衡后的原始投资组合数据"""
+        try:
+            # 清除再平衡历史
+            self.rebalance_manager = RebalanceManager()
+
+            # 重新计算原始投资组合数据
+            self.create_portfolio_data(
+                self.data,
+                self.start_date,
+                self.end_date
+            )
+
+            # 更新图表
+            self.update_plot()
+
+        except Exception as e:
+            self.logger.error(f"重置投资组合数据时发生错误: {str(e)}")
+            messagebox.showerror("错误", f"重置投资组合数据时发生错误: {str(e)}")
 
     def update_rebalance_period(self):
         """更新再平衡周期"""
@@ -872,7 +1043,7 @@ class InvestmentApp:
         ttk.Label(self.left_frame, text="起始日期 (YYYY-MM):").pack(anchor=tk.W, pady=(0, 5))
         self.start_date_entry = ttk.Entry(self.left_frame, width=10)
         self.start_date_entry.pack(anchor=tk.W, pady=(0, 10))
-        self.start_date_entry.insert(0, "2024-01")
+        self.start_date_entry.insert(0, "2014-01")
 
         ttk.Label(self.left_frame, text="结束日期 (YYYY-MM):").pack(anchor=tk.W, pady=(0, 5))
         self.end_date_entry = ttk.Entry(self.left_frame, width=10)
@@ -1054,18 +1225,31 @@ class InvestmentApp:
         return date
 
     def get_investment_dates(self, start_date, end_date, data_index):
+        """
+        获取投资日期列表
+
+        Args:
+            start_date: 开始日期
+            end_date: 结束日期
+            data_index: 数据索引
+
+        Returns:
+            investment_dates: 投资日期列表
+        """
         investment_dates = []
         current_date = start_date.replace(day=1)  # 从起始日期的当月开始
 
         while current_date <= end_date:
-            # 获取当月第二周的周三
+            # 获取当月第二个周三
             investment_date = self.get_second_wednesday(current_date)
 
             # 如果投资日期在数据范围内，则添加到列表
-            if start_date <= investment_date <= end_date:
-                # 获取最近的交易日（如果当天不是交易日，则向后顺延）
+            # 将日期转换为 pandas Timestamp 进行比较
+            if pd.Timestamp(start_date) <= pd.Timestamp(investment_date) <= pd.Timestamp(end_date):
+                # 获取最近的交易日
                 actual_investment_date = self.get_nearest_business_day(investment_date, data_index)
-                investment_dates.append(actual_investment_date)
+                if actual_investment_date is not None:
+                    investment_dates.append(actual_investment_date)
 
             # 移动到下一个月
             current_date = (current_date.replace(day=1) + timedelta(days=32)).replace(day=1)
@@ -1261,6 +1445,11 @@ class InvestmentApp:
 
         self.logger.info(f"开始创建投资组合数据 - 起始日期: {start_date}, 结束日期: {end_date}")
         self.logger.info(f"投资组合配置: {self.portfolio_allocations}")
+
+        # 保存日期供后续使用
+        self.start_date = start_date
+        self.end_date = end_date
+        self.data = data.copy()
 
         portfolio_data = pd.DataFrame(index=data.index)
         portfolio_data['Portfolio_Value'] = 0.0
