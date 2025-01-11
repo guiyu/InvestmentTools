@@ -194,3 +194,4 @@ Thumbs.db
 output/
 pushplus_token.json
 investment_history.json
+/.history

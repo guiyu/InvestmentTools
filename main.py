@@ -20,7 +20,7 @@ import requests
 import time
 from datetime import datetime, timedelta, date, time as datetime_time
 import schedule
-
+from scipy import stats
 from matplotlib import font_manager
 
 # 在文件顶部添加这个打印语句，以确认导入成功
@@ -59,6 +59,13 @@ class InvestmentApp:
             'macd_short_window': 12,
             'macd_long_window': 26,
             'macd_signal_window': 9,
+            # 新增期权策略相关配置
+            'iv_window': 30,          # IV观察窗口
+            'iv_short_window': 10,    # 短期IV窗口
+            'iv_low_percentile': 20,  # IV低分位线
+            'iv_high_percentile': 80, # IV高分位线
+            'vix_window': 30,         # VIX观察窗口
+            'option_position_limit': 0.03  # 期权头寸限制(占总资金比例)
         }
 
         self.portfolio_allocations = {}
@@ -109,6 +116,98 @@ class InvestmentApp:
                 print("自动登录失败，请手动登录")
                 # 自动登录失败时，确保清理状态
                 self.logout()
+
+    def calculate_historical_volatility(self, data, window=30):
+        """计算历史波动率"""
+        returns = np.log(data / data.shift(1))
+        return returns.rolling(window=window).std() * np.sqrt(252)
+
+    def analyze_volatility(self, ticker, data):
+        """分析波动率状态"""
+        try:
+            # 获取VIX数据
+            end_date = data.index[-1]
+            start_date = end_date - pd.Timedelta(days=365)
+            vix_data = yf.download('^VIX', start=start_date, end=end_date)['Adj Close']
+            
+            # 计算标的历史波动率
+            hist_vol = self.calculate_historical_volatility(data[ticker], 
+                                                        window=self.config['iv_window'])
+            short_vol = self.calculate_historical_volatility(data[ticker], 
+                                                        window=self.config['iv_short_window'])
+            
+            # 计算分位数
+            iv_low = np.percentile(hist_vol.dropna(), self.config['iv_low_percentile'])
+            iv_high = np.percentile(hist_vol.dropna(), self.config['iv_high_percentile'])
+            vix_low = np.percentile(vix_data.dropna(), self.config['iv_low_percentile'])
+            vix_high = np.percentile(vix_data.dropna(), self.config['iv_high_percentile'])
+            
+            current_vol = hist_vol.iloc[-1]
+            current_short_vol = short_vol.iloc[-1]
+            current_vix = vix_data.iloc[-1]
+
+            # 判断趋势
+            vol_trend = 'flat'
+            if len(hist_vol) > 10:
+                recent_vol = hist_vol[-10:]
+                slope = np.polyfit(range(len(recent_vol)), recent_vol, 1)[0]
+                vol_trend = 'up' if slope > 0 else 'down' if slope < 0 else 'flat'
+                
+            return {
+                'iv_state': 'low' if current_vol < iv_low else 'high' if current_vol > iv_high else 'normal',
+                'vix_state': 'low' if current_vix < vix_low else 'high' if current_vix > vix_high else 'normal',
+                'current_iv': current_vol,
+                'current_short_iv': current_short_vol,
+                'current_vix': current_vix,
+                'iv_percentile': stats.percentileofscore(hist_vol.dropna(), current_vol),
+                'vix_percentile': stats.percentileofscore(vix_data.dropna(), current_vix),
+                'vol_trend': vol_trend,
+                'mean_iv': hist_vol.mean()
+            }
+        except Exception as e:
+            self.logger.error(f"波动率分析失败: {str(e)}")
+            return None
+
+    def get_option_signal(self, volatility_state, price):
+        """生成期权交易信号"""
+        if not volatility_state:
+            return None
+            
+        signal = {
+            'type': 'none',
+            'action': '建议观望',
+            'reason': '当前市场状态不适合期权交易',
+            'risk_level': 'low'
+        }
+        
+        iv_state = volatility_state['iv_state']
+        vix_state = volatility_state['vix_state']
+        vol_trend = volatility_state['vol_trend']
+        
+        if iv_state == 'low' and vix_state != 'high':
+            signal.update({
+                'type': 'sell_call',
+                'action': '建议卖出OTM看涨期权',
+                'reason': 'IV处于低位,VIX未处于高位',
+                'strike_price': price * 1.07,  # 7% OTM
+                'risk_level': 'medium'
+            })
+        elif iv_state == 'high' and vix_state != 'low':
+            signal.update({
+                'type': 'sell_put',
+                'action': '建议卖出OTM看跌期权',
+                'reason': 'IV处于高位,VIX未处于低位',
+                'strike_price': price * 0.93,  # 7% OTM
+                'risk_level': 'medium'
+            })
+        
+        # 根据波动率趋势调整风险等级
+        if vol_trend == 'up':
+            signal['risk_level'] = 'high'
+        elif vol_trend == 'down':
+            signal['risk_level'] = 'low'
+            
+        return signal
 
     def load_token(self):
         if os.path.exists(self.token_file):
@@ -1056,10 +1155,6 @@ class InvestmentApp:
             return False
 
     def analyze_and_plot(self, ticker, start_date, end_date):
-        # if not self.check_login():
-        #     return None
-
-        # 检查网络连接
         if not self.check_internet_connection():
             messagebox.showerror("网络错误", "无法连接到互联网。请检查您的网络连接后重试。")
             return None
@@ -1119,10 +1214,9 @@ class InvestmentApp:
 
             # 加权定投策略
             weight = self.calculate_weight(price,
-                                           data[ticker].rolling(window=self.config['sma_window']).mean().loc[d],
-                                           data[ticker].rolling(window=self.config['std_window']).std().loc[d],
-                                           data[ticker].rolling(
-                                               window=self.config['std_window']).std().expanding().mean().loc[d])
+                                        data[ticker].rolling(window=self.config['sma_window']).mean().loc[d],
+                                        data[ticker].rolling(window=self.config['std_window']).std().loc[d],
+                                        data[ticker].rolling(window=self.config['std_window']).std().expanding().mean().loc[d])
             weighted_invest_amount = base_investment * weight
             weighted_shares = weighted_invest_amount / price
 
@@ -1145,10 +1239,8 @@ class InvestmentApp:
         daily_data['weighted_market_value'] = daily_data['weighted_cumulative_shares'] * daily_data['price']
 
         # 计算每日累计收益
-        daily_data['equal_cumulative_return'] = daily_data['equal_market_value'] - daily_data[
-            'equal_cumulative_investment']
-        daily_data['weighted_cumulative_return'] = daily_data['weighted_market_value'] - daily_data[
-            'weighted_cumulative_investment']
+        daily_data['equal_cumulative_return'] = daily_data['equal_market_value'] - daily_data['equal_cumulative_investment']
+        daily_data['weighted_cumulative_return'] = daily_data['weighted_market_value'] - daily_data['weighted_cumulative_investment']
 
         # 绘图
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
@@ -1156,15 +1248,36 @@ class InvestmentApp:
 
         # 绘制每日累计收益
         ax1.plot(daily_data.index, daily_data['equal_cumulative_return'],
-                 label=f'{ticker} 等权累计收益', color='orange')
+                label=f'{ticker} 等权累计收益', color='orange')
         ax1.plot(daily_data.index, daily_data['weighted_cumulative_return'],
-                 label=f'{ticker} 加权累计收益', color='blue')
+                label=f'{ticker} 加权累计收益', color='blue')
+
+        # 添加波动率分析
+        volatility_state = self.analyze_volatility(ticker, data)
+        if volatility_state:
+            signal = self.get_option_signal(volatility_state, data[ticker].iloc[-1])
+            
+            # 在图表上添加策略信息
+            strategy_info = (
+                f"期权策略分析:\n"
+                f"IV分位: {volatility_state['iv_percentile']:.1f}%\n"
+                f"VIX分位: {volatility_state['vix_percentile']:.1f}%\n"
+                f"波动率趋势: {volatility_state['vol_trend']}\n"
+                f"建议操作: {signal['action']}\n"
+                f"原因: {signal['reason']}\n"
+                f"风险等级: {signal['risk_level']}"
+            )
+            
+            # 在左上角添加策略信息
+            ax1.text(0.02, 0.98, strategy_info,
+                    transform=ax1.transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
         portfolio_returns = None
         if self.portfolio_allocations:
             portfolio_data = self.create_portfolio_data(data, start_date, end_date)
             portfolio_returns = portfolio_data['Portfolio_Return']
-            # 将整个 portfolio_data 附加到 portfolio_returns
             portfolio_returns.portfolio_data = portfolio_data
             ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
 
@@ -1186,7 +1299,7 @@ class InvestmentApp:
         y_range = y_max - y_min
         ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
 
-        # 添加终点注释部分的更新
+        # 添加终点注释
         self.add_endpoint_annotations(
             ax1,
             daily_data[['equal_cumulative_return']],
@@ -1195,7 +1308,7 @@ class InvestmentApp:
             portfolio_returns
         )
 
-        # 绘制MACD（其余部分保持不变）
+        # 绘制MACD
         ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
         ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
         ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'],
@@ -1231,7 +1344,7 @@ class InvestmentApp:
         )
 
         ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
-                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
         plt.tight_layout()
         return fig
