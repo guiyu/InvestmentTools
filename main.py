@@ -46,6 +46,14 @@ class InvestmentApp:
         self.setup_logger()
         self.setup_chinese_font()
 
+        # 设置matplotlib全局字体大小
+        plt.rcParams['font.size'] = 9
+        plt.rcParams['axes.titlesize'] = 10
+        plt.rcParams['axes.labelsize'] = 9
+        plt.rcParams['xtick.labelsize'] = 8
+        plt.rcParams['ytick.labelsize'] = 8
+        plt.rcParams['legend.fontsize'] = 8
+        plt.rcParams['figure.titlesize'] = 10
         plt.rcParams['axes.unicode_minus'] = False
 
         # 配置
@@ -183,9 +191,8 @@ class InvestmentApp:
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         # 初始化图表
-        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True,
-                                                      gridspec_kw={'height_ratios': [2, 1]})
-        self.fig.subplots_adjust(hspace=0.1)
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(8, 7), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+        self.fig.subplots_adjust(hspace=0.1, bottom=0.12, top=0.92, left=0.12, right=0.92)
 
         # 设置初始坐标轴
         self.ax1.set_ylabel('累计收益 ($)')
@@ -993,38 +1000,33 @@ class InvestmentApp:
     def add_endpoint_annotations(self, ax, equal_returns, weighted_returns, equal_column_name, portfolio_returns=None):
         """
         添加终点注释
-
-        Parameters:
-        ax: matplotlib axis对象
-        equal_returns: 等权收益DataFrame
-        weighted_returns: 加权收益DataFrame
-        equal_column_name: 等权收益列名
-        portfolio_returns: 可选的组合收益Series
         """
         try:
+            # 只在最后一个点添加注释，使用更小的字体和更紧凑的格式
+            
             # 加权收益终点注释
             if 'weighted_cumulative_return' in weighted_returns.columns:
                 weighted_value = weighted_returns['weighted_cumulative_return'].iloc[-1]
-                ax.scatter(weighted_returns.index[-1], weighted_value, color='blue')
-                ax.annotate(f'{weighted_value:.2f}',
+                ax.scatter(weighted_returns.index[-1], weighted_value, color='blue', s=20)
+                ax.annotate(f'{weighted_value:.0f}',
                             (weighted_returns.index[-1], weighted_value),
-                            textcoords="offset points", xytext=(0, 10), ha='center')
+                            textcoords="offset points", xytext=(0, 5), ha='center', fontsize=7)
 
             # 等权收益终点注释
             if 'equal_cumulative_return' in equal_returns.columns:
                 equal_value = equal_returns['equal_cumulative_return'].iloc[-1]
-                ax.scatter(equal_returns.index[-1], equal_value, color='orange')
-                ax.annotate(f'{equal_value:.2f}',
+                ax.scatter(equal_returns.index[-1], equal_value, color='orange', s=20)
+                ax.annotate(f'{equal_value:.0f}',
                             (equal_returns.index[-1], equal_value),
-                            textcoords="offset points", xytext=(0, 10), ha='center')
+                            textcoords="offset points", xytext=(0, 5), ha='center', fontsize=7)
 
             # 投资组合收益终点注释
             if portfolio_returns is not None and len(portfolio_returns) > 0:
                 portfolio_value = portfolio_returns.iloc[-1]
-                ax.scatter(portfolio_returns.index[-1], portfolio_value, color='green')
-                ax.annotate(f'{portfolio_value:.2f}',
+                ax.scatter(portfolio_returns.index[-1], portfolio_value, color='green', s=20)
+                ax.annotate(f'{portfolio_value:.0f}',
                             (portfolio_returns.index[-1], portfolio_value),
-                            textcoords="offset points", xytext=(0, 10), ha='center')
+                            textcoords="offset points", xytext=(0, 5), ha='center', fontsize=7)
 
         except Exception as e:
             print(f"添加终点注释时出现错误: {str(e)}")
@@ -1058,8 +1060,7 @@ class InvestmentApp:
         weighted_final_value = weighted_portfolio_values['weighted_market_value'].iloc[-1]
 
         equal_total_return = (equal_final_value / total_equal_investment - 1) * 100 if total_equal_investment > 0 else 0
-        weighted_total_return = (
-                                            weighted_final_value / total_weighted_investment - 1) * 100 if total_weighted_investment > 0 else 0
+        weighted_total_return = (weighted_final_value / total_weighted_investment - 1) * 100 if total_weighted_investment > 0 else 0
 
         investment_period_days = (end_date - start_date).days
 
@@ -1109,6 +1110,7 @@ class InvestmentApp:
             summary += f"  年化回报率: {portfolio_annual_return:.2f}%\n"
 
         return summary
+
     def check_internet_connection(self):
         try:
             # 尝试连接多个网站，只要有一个能连接成功就返回True
@@ -1260,14 +1262,14 @@ class InvestmentApp:
                 'weighted_cumulative_investment']
 
             # 绘图
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
-            fig.subplots_adjust(hspace=0.1)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 7), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+            fig.subplots_adjust(hspace=0.1, bottom=0.12, top=0.92, left=0.12, right=0.92)
 
             # 绘制每日累计收益
             ax1.plot(daily_data.index, daily_data['equal_cumulative_return'],
-                     label=f'{ticker} 等权累计收益', color='orange')
+                     label=f'等权', color='orange')
             ax1.plot(daily_data.index, daily_data['weighted_cumulative_return'],
-                     label=f'{ticker} 加权累计收益', color='blue')
+                     label=f'加权', color='blue')
 
             portfolio_returns = None
             if self.portfolio_allocations:
@@ -1275,16 +1277,20 @@ class InvestmentApp:
                 portfolio_returns = portfolio_data['Portfolio_Return']
                 # 将整个 portfolio_data 附加到 portfolio_returns
                 portfolio_returns.portfolio_data = portfolio_data
-                ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
+                ax1.plot(portfolio_data.index, portfolio_returns, label='组合', color='green')
 
             # 设置图表属性
-            ax1.set_title(f'{ticker}: 累计收益比较 ({start_date.year}-{end_date.year})')
-            ax1.set_ylabel('累计收益 ($)')
-            ax1.legend()
-            ax1.grid(True)
+            ax1.set_title(f'{ticker}累计收益({start_date.year}-{end_date.year})', fontsize=9)
+            ax1.set_ylabel('收益($)', fontsize=8)
+            ax1.legend(fontsize=7, loc='upper left', framealpha=0.7)
+            ax1.grid(True, alpha=0.3)
+            
+            # 设置刻度标签字体大小
+            ax1.tick_params(axis='both', which='major', labelsize=7)
+            ax1.tick_params(axis='both', which='minor', labelsize=6)
 
             # 添加零线
-            ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
+            ax1.axhline(y=0, color='red', linestyle=':', linewidth=0.8)
 
             # 确保y轴范围包含所有数据点
             y_values = [daily_data['equal_cumulative_return'], daily_data['weighted_cumulative_return']]
@@ -1306,23 +1312,23 @@ class InvestmentApp:
 
             # 绘制MACD（其余部分保持不变）
             ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
-            ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
+            ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal', color='red')
             ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'],
-                    label='Histogram', color='gray', alpha=0.5)
+                    label='Hist', color='gray', alpha=0.5)
             ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
-            ax2.set_ylabel('MACD')
-            ax2.legend(loc='upper left')
-            ax2.grid(True)
-
+            ax2.set_ylabel('MACD', fontsize=8)
+            ax2.legend(loc='upper left', fontsize=6)
+            ax2.grid(True, alpha=0.3)
+            
             # 设置x轴属性
-            ax2.set_xlabel('日期')
-            years = mdates.YearLocator(2)
-            months = mdates.MonthLocator()
+            ax2.set_xlabel('日期', fontsize=8)
+            years = mdates.YearLocator(2)  # 每2年标记一次
+            months = mdates.MonthLocator(interval=4)  # 每4个月标记一次
             years_fmt = mdates.DateFormatter('%Y')
             ax2.xaxis.set_major_locator(years)
             ax2.xaxis.set_major_formatter(years_fmt)
             ax2.xaxis.set_minor_locator(months)
-            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=6)
             ax2.set_xlim(data.index[0], data.index[-1])
 
             # 更新统计信息
@@ -1339,10 +1345,15 @@ class InvestmentApp:
                 portfolio_returns
             )
 
-            ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
-                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            # 使用更小的字体显示摘要信息，并调整位置到图表左侧
+            ax1.text(0.02, 0.98, summary, transform=ax1.transAxes, 
+                     verticalalignment='top', horizontalalignment='left',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5), 
+                     fontsize=5.5, linespacing=0.95)
+            
+            # 确保图表不会超出边界
+            plt.tight_layout(pad=0.5)
 
-            plt.tight_layout()
             return fig
 
         except Exception as e:
