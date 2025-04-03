@@ -214,32 +214,64 @@ class InvestmentApp:
             beijing_tz = pytz.timezone('Asia/Shanghai')
             now = datetime.now(beijing_tz)
 
+            # 检查网络连接
+            if not self.check_internet_connection():
+                error_msg = "无法连接到数据服务器。这可能是因为网络连接问题或数据服务暂时不可用。"
+                if self.master:
+                    messagebox.showerror("网络错误", error_msg)
+                else:
+                    print(error_msg)
+                return error_msg
+
             # 获取股票数据
-            stock = yf.Ticker(ticker)
-
-            # 检查是否在交易时间
-            trading_start = datetime_time(9, 30)
-            trading_end = datetime_time(16, 0)
-            current_time = now.time()
-
-            if trading_start <= current_time <= trading_end and now.weekday() < 5:
-                # 交易时间，尝试获取当前价格
-                try:
-                    current_price = stock.info['regularMarketPrice']
-                except KeyError:
-                    # 如果无法获取regularMarketPrice，尝试使用最新的收盘价
-                    hist = stock.history(period="1d")
+            try:
+                print(f"尝试获取 {ticker} 的数据")
+                stock = yf.Ticker(ticker)
+                
+                # 检查是否在交易时间
+                trading_start = datetime_time(9, 30)
+                trading_end = datetime_time(16, 0)
+                current_time = now.time()
+                
+                # 首先尝试获取最新市场价格
+                if trading_start <= current_time <= trading_end and now.weekday() < 5:
+                    # 交易时间，尝试获取当前价格
+                    try:
+                        info = stock.info
+                        if not info or 'regularMarketPrice' not in info:
+                            raise KeyError("无法获取市场价格信息")
+                        current_price = info['regularMarketPrice']
+                        print(f"获取到当前市场价格: {current_price}")
+                    except (KeyError, TypeError) as e:
+                        print(f"获取当前价格失败: {str(e)}，尝试使用历史数据")
+                        # 如果无法获取regularMarketPrice，尝试使用最新的收盘价
+                        hist = stock.history(period="1d")
+                        if hist.empty:
+                            raise ValueError("无法获取当前价格和历史数据")
+                        if 'Close' in hist.columns:
+                            current_price = hist['Close'].iloc[-1]
+                            print(f"使用最近的收盘价: {current_price}")
+                        else:
+                            raise ValueError("历史数据中没有收盘价列")
+                else:
+                    # 非交易时间，获取最近的收盘价
+                    print("非交易时间，获取历史数据")
+                    end_date = now.date()
+                    start_date = end_date - timedelta(days=5)  # 获取过去5天的数据
+                    hist = stock.history(start=start_date, end=end_date)
                     if hist.empty:
-                        raise ValueError("无法获取当前价格和历史数据")
-                    current_price = hist['Close'].iloc[-1]
-            else:
-                # 非交易时间，获取最近的收盘价
-                end_date = now.date()
-                start_date = end_date - timedelta(days=5)  # 获取过去5天的数据
-                hist = stock.history(start=start_date, end=end_date)
-                if hist.empty:
-                    raise ValueError("无法获取历史数据")
-                current_price = hist['Close'].iloc[-1]
+                        raise ValueError("无法获取历史数据")
+                    if 'Close' in hist.columns:
+                        current_price = hist['Close'].iloc[-1]
+                        print(f"使用最近的收盘价: {current_price}")
+                    else:
+                        raise ValueError("历史数据中没有收盘价列")
+            except Exception as e:
+                error_msg = f"获取 {ticker} 数据时出错: {str(e)}"
+                print(f"详细错误: {error_msg}")
+                if self.master:
+                    messagebox.showerror("数据错误", error_msg)
+                return error_msg
 
             # 确保 current_price 是浮点数
             if not isinstance(current_price, (int, float)):
@@ -872,8 +904,38 @@ class InvestmentApp:
                 if weight == 0:
                     continue
                 if ticker not in data.columns:
-                    ticker_data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
-                    data[ticker] = ticker_data
+                    try:
+                        self.logger.info(f"下载 {ticker} 的数据")
+                        # 获取历史数据
+                        ticker_data_full = yf.download(ticker, start=start_date, end=end_date)
+                        
+                        # 检查数据是否为空
+                        if ticker_data_full.empty:
+                            self.logger.warning(f"无法获取 {ticker} 的数据，跳过此标的")
+                            continue
+                            
+                        # 检查是否包含 'Adj Close' 列
+                        if 'Adj Close' not in ticker_data_full.columns:
+                            self.logger.warning(f"下载的 {ticker} 数据不包含 'Adj Close' 列。尝试使用 'Close' 列。")
+                            # 尝试使用 'Close' 列作为替代
+                            if 'Close' in ticker_data_full.columns:
+                                ticker_data = ticker_data_full['Close']
+                            else:
+                                self.logger.error(f"获取的 {ticker} 数据格式异常，缺少价格信息。跳过此标的。")
+                                continue
+                        else:
+                            ticker_data = ticker_data_full['Adj Close']
+                            
+                        data[ticker] = ticker_data
+                        
+                    except Exception as e:
+                        self.logger.error(f"获取 {ticker} 数据时出错: {str(e)}。跳过此标的。")
+                        continue
+
+                # 检查特定日期是否有数据
+                if date not in data.index or pd.isna(data.loc[date, ticker]):
+                    self.logger.warning(f"{date} 没有 {ticker} 的数据，跳过此标的")
+                    continue
 
                 price = data.loc[date, ticker]
                 allocation = self.config['base_investment'] * weight
@@ -1049,10 +1111,29 @@ class InvestmentApp:
         return summary
     def check_internet_connection(self):
         try:
-            # 尝试连接到 Yahoo Finance 的网站
-            response = requests.get("https://finance.yahoo.com", timeout=5)
-            return response.status_code == 200
-        except requests.ConnectionError:
+            # 尝试连接多个网站，只要有一个能连接成功就返回True
+            websites = [
+                "https://www.baidu.com",  # 中国用户通常可以访问的网站
+                "https://www.qq.com",
+                "https://www.bing.com",
+                "https://www.sina.com.cn",
+                "https://finance.yahoo.com"  # 原有的网站，但放在最后尝试
+            ]
+            
+            for website in websites:
+                try:
+                    response = requests.get(website, timeout=3)
+                    if response.status_code == 200:
+                        print(f"成功连接到 {website}")
+                        return True
+                except:
+                    continue
+                    
+            # 所有网站都连接失败
+            print("无法连接到任何测试网站")
+            return False
+        except Exception as e:
+            print(f"网络连接检测发生错误: {str(e)}")
             return False
 
     def analyze_and_plot(self, ticker, start_date, end_date):
@@ -1061,180 +1142,214 @@ class InvestmentApp:
 
         # 检查网络连接
         if not self.check_internet_connection():
-            messagebox.showerror("网络错误", "无法连接到互联网。请检查您的网络连接后重试。")
+            messagebox.showerror("网络错误", "无法连接到数据服务器。这可能是因为：\n1. 网络连接异常\n2. 防火墙或网络设置限制了连接\n3. 数据服务器暂时不可用\n\n请检查网络连接或稍后再试。如果问题持续存在，可尝试使用VPN。")
             return None
 
-        # 下载数据
-        data = yf.download(ticker, start=start_date, end=end_date)['Adj Close']
+        try:
+            # 下载数据
+            print(f"开始下载 {ticker} 的数据，从 {start_date} 到 {end_date}")
+            data = yf.download(ticker, start=start_date, end=end_date)
+            
+            # 检查数据是否为空
+            if data.empty:
+                messagebox.showerror("数据错误", f"无法获取 {ticker} 的数据。可能是因为：\n1. 股票代码不存在\n2. 所选时间范围内没有数据\n3. Yahoo Finance 服务暂时不可用")
+                return None
+                
+            # 检查是否包含 'Adj Close' 列
+            if 'Adj Close' not in data.columns:
+                print(f"警告: 下载的数据不包含 'Adj Close' 列。可用列: {data.columns.tolist()}")
+                # 尝试使用 'Close' 列作为替代
+                if 'Close' in data.columns:
+                    print("使用 'Close' 列代替 'Adj Close'")
+                    adj_close = data['Close']
+                else:
+                    messagebox.showerror("数据错误", f"获取的 {ticker} 数据格式异常，缺少价格信息。请稍后再试。")
+                    return None
+            else:
+                adj_close = data['Adj Close']
+                
+            # 确保数据是浮点数类型
+            adj_close = adj_close.astype(float)
+            
+        except Exception as e:
+            error_message = f"获取数据过程中出现错误: {str(e)}"
+            print(error_message)
+            messagebox.showerror("数据错误", f"获取 {ticker} 数据时出错: {str(e)}\n\n这可能是因为网络问题或Yahoo Finance服务暂时不可用。请稍后再试。")
+            return None
 
-        # 确保数据是浮点数类型
-        data = data.astype(float)
+        try:
+            # 计算技术指标
+            data = pd.DataFrame(adj_close)
+            data.columns = [ticker]
+            data[f'{ticker}_SMA50'] = data[ticker].rolling(window=50).mean()
+            data[f'{ticker}_SMA200'] = data[ticker].rolling(window=200).mean()
+            data['RSI'] = self.calculate_rsi(data[ticker])
 
-        # 计算技术指标
-        data = pd.DataFrame(data)
-        data.columns = [ticker]
-        data[f'{ticker}_SMA50'] = data[ticker].rolling(window=50).mean()
-        data[f'{ticker}_SMA200'] = data[ticker].rolling(window=200).mean()
-        data['RSI'] = self.calculate_rsi(data[ticker])
+            # 计算MACD
+            data[f'{ticker}_MACD'], data[f'{ticker}_MACD_SIGNAL'], _ = self.calculate_macd(
+                data[ticker],
+                short_window=self.config['macd_short_window'],
+                long_window=self.config['macd_long_window'],
+                signal_window=self.config['macd_signal_window']
+            )
 
-        # 计算MACD
-        data[f'{ticker}_MACD'], data[f'{ticker}_MACD_SIGNAL'], _ = self.calculate_macd(
-            data[ticker],
-            short_window=self.config['macd_short_window'],
-            long_window=self.config['macd_long_window'],
-            signal_window=self.config['macd_signal_window']
-        )
+            # 将索引转换为日期类型
+            data.index = pd.to_datetime(data.index).date
 
-        # 将索引转换为日期类型
-        data.index = pd.to_datetime(data.index).date
+            # 创建投资日期列表
+            investment_dates = self.get_investment_dates(start_date, end_date, data.index)
 
-        # 创建投资日期列表
-        investment_dates = self.get_investment_dates(start_date, end_date, data.index)
+            if not investment_dates:
+                messagebox.showerror("日期错误", "选定的日期范围内没有可用的投资日期（每月第二个周三）")
+                return None
 
-        if not investment_dates:
-            raise ValueError("选定的日期范围内没有可用的投资日期")
+            # 初始化每日数据DataFrame
+            base_investment = self.config['base_investment']
+            daily_data = pd.DataFrame(index=data.index)
+            daily_data['price'] = data[ticker]
 
-        # 初始化每日数据DataFrame
-        base_investment = self.config['base_investment']
-        daily_data = pd.DataFrame(index=data.index)
-        daily_data['price'] = data[ticker]
+            # 初始化持仓和投资数据
+            daily_data['equal_shares'] = 0.0
+            daily_data['weighted_shares'] = 0.0
+            daily_data['equal_investment'] = 0.0
+            daily_data['weighted_investment'] = 0.0
+            daily_data['equal_cumulative_shares'] = 0.0
+            daily_data['weighted_cumulative_shares'] = 0.0
+            daily_data['equal_cumulative_investment'] = 0.0
+            daily_data['weighted_cumulative_investment'] = 0.0
 
-        # 初始化持仓和投资数据
-        daily_data['equal_shares'] = 0.0
-        daily_data['weighted_shares'] = 0.0
-        daily_data['equal_investment'] = 0.0
-        daily_data['weighted_investment'] = 0.0
-        daily_data['equal_cumulative_shares'] = 0.0
-        daily_data['weighted_cumulative_shares'] = 0.0
-        daily_data['equal_cumulative_investment'] = 0.0
-        daily_data['weighted_cumulative_investment'] = 0.0
+            # 计算每个投资日的投资情况
+            for d in investment_dates:
+                price = data.loc[d, ticker]
 
-        # 计算每个投资日的投资情况
-        for d in investment_dates:
-            price = data.loc[d, ticker]
+                # 等额定投策略
+                equal_invest_amount = base_investment
+                equal_shares = equal_invest_amount / price
 
-            # 等额定投策略
-            equal_invest_amount = base_investment
-            equal_shares = equal_invest_amount / price
+                # 加权定投策略
+                weight = self.calculate_weight(price,
+                                               data[ticker].rolling(window=self.config['sma_window']).mean().loc[d],
+                                               data[ticker].rolling(window=self.config['std_window']).std().loc[d],
+                                               data[ticker].rolling(
+                                                   window=self.config['std_window']).std().expanding().mean().loc[d])
+                weighted_invest_amount = base_investment * weight
+                weighted_shares = weighted_invest_amount / price
 
-            # 加权定投策略
-            weight = self.calculate_weight(price,
-                                           data[ticker].rolling(window=self.config['sma_window']).mean().loc[d],
-                                           data[ticker].rolling(window=self.config['std_window']).std().loc[d],
-                                           data[ticker].rolling(
-                                               window=self.config['std_window']).std().expanding().mean().loc[d])
-            weighted_invest_amount = base_investment * weight
-            weighted_shares = weighted_invest_amount / price
+                # 记录投资日的数据
+                daily_data.loc[d, 'equal_shares'] = equal_shares
+                daily_data.loc[d, 'weighted_shares'] = weighted_shares
+                daily_data.loc[d, 'equal_investment'] = equal_invest_amount
+                daily_data.loc[d, 'weighted_investment'] = weighted_invest_amount
 
-            # 记录投资日的数据
-            daily_data.loc[d, 'equal_shares'] = equal_shares
-            daily_data.loc[d, 'weighted_shares'] = weighted_shares
-            daily_data.loc[d, 'equal_investment'] = equal_invest_amount
-            daily_data.loc[d, 'weighted_investment'] = weighted_invest_amount
+            # 计算累计持股数
+            daily_data['equal_cumulative_shares'] = daily_data['equal_shares'].cumsum()
+            daily_data['weighted_cumulative_shares'] = daily_data['weighted_shares'].cumsum()
 
-        # 计算累计持股数
-        daily_data['equal_cumulative_shares'] = daily_data['equal_shares'].cumsum()
-        daily_data['weighted_cumulative_shares'] = daily_data['weighted_shares'].cumsum()
+            # 计算累计投资额
+            daily_data['equal_cumulative_investment'] = daily_data['equal_investment'].cumsum()
+            daily_data['weighted_cumulative_investment'] = daily_data['weighted_investment'].cumsum()
 
-        # 计算累计投资额
-        daily_data['equal_cumulative_investment'] = daily_data['equal_investment'].cumsum()
-        daily_data['weighted_cumulative_investment'] = daily_data['weighted_investment'].cumsum()
+            # 计算每日市值
+            daily_data['equal_market_value'] = daily_data['equal_cumulative_shares'] * daily_data['price']
+            daily_data['weighted_market_value'] = daily_data['weighted_cumulative_shares'] * daily_data['price']
 
-        # 计算每日市值
-        daily_data['equal_market_value'] = daily_data['equal_cumulative_shares'] * daily_data['price']
-        daily_data['weighted_market_value'] = daily_data['weighted_cumulative_shares'] * daily_data['price']
+            # 计算每日累计收益
+            daily_data['equal_cumulative_return'] = daily_data['equal_market_value'] - daily_data[
+                'equal_cumulative_investment']
+            daily_data['weighted_cumulative_return'] = daily_data['weighted_market_value'] - daily_data[
+                'weighted_cumulative_investment']
 
-        # 计算每日累计收益
-        daily_data['equal_cumulative_return'] = daily_data['equal_market_value'] - daily_data[
-            'equal_cumulative_investment']
-        daily_data['weighted_cumulative_return'] = daily_data['weighted_market_value'] - daily_data[
-            'weighted_cumulative_investment']
+            # 绘图
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+            fig.subplots_adjust(hspace=0.1)
 
-        # 绘图
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
-        fig.subplots_adjust(hspace=0.1)
+            # 绘制每日累计收益
+            ax1.plot(daily_data.index, daily_data['equal_cumulative_return'],
+                     label=f'{ticker} 等权累计收益', color='orange')
+            ax1.plot(daily_data.index, daily_data['weighted_cumulative_return'],
+                     label=f'{ticker} 加权累计收益', color='blue')
 
-        # 绘制每日累计收益
-        ax1.plot(daily_data.index, daily_data['equal_cumulative_return'],
-                 label=f'{ticker} 等权累计收益', color='orange')
-        ax1.plot(daily_data.index, daily_data['weighted_cumulative_return'],
-                 label=f'{ticker} 加权累计收益', color='blue')
+            portfolio_returns = None
+            if self.portfolio_allocations:
+                portfolio_data = self.create_portfolio_data(data, start_date, end_date)
+                portfolio_returns = portfolio_data['Portfolio_Return']
+                # 将整个 portfolio_data 附加到 portfolio_returns
+                portfolio_returns.portfolio_data = portfolio_data
+                ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
 
-        portfolio_returns = None
-        if self.portfolio_allocations:
-            portfolio_data = self.create_portfolio_data(data, start_date, end_date)
-            portfolio_returns = portfolio_data['Portfolio_Return']
-            # 将整个 portfolio_data 附加到 portfolio_returns
-            portfolio_returns.portfolio_data = portfolio_data
-            ax1.plot(portfolio_data.index, portfolio_returns, label='资产组合累计收益', color='green')
+            # 设置图表属性
+            ax1.set_title(f'{ticker}: 累计收益比较 ({start_date.year}-{end_date.year})')
+            ax1.set_ylabel('累计收益 ($)')
+            ax1.legend()
+            ax1.grid(True)
 
-        # 设置图表属性
-        ax1.set_title(f'{ticker}: 累计收益比较 ({start_date.year}-{end_date.year})')
-        ax1.set_ylabel('累计收益 ($)')
-        ax1.legend()
-        ax1.grid(True)
+            # 添加零线
+            ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
 
-        # 添加零线
-        ax1.axhline(y=0, color='red', linestyle=':', linewidth=1)
+            # 确保y轴范围包含所有数据点
+            y_values = [daily_data['equal_cumulative_return'], daily_data['weighted_cumulative_return']]
+            if portfolio_returns is not None:
+                y_values.append(portfolio_returns)
+            y_min = min(min(y) for y in y_values)
+            y_max = max(max(y) for y in y_values)
+            y_range = y_max - y_min
+            ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
 
-        # 确保y轴范围包含所有数据点
-        y_values = [daily_data['equal_cumulative_return'], daily_data['weighted_cumulative_return']]
-        if portfolio_returns is not None:
-            y_values.append(portfolio_returns)
-        y_min = min(min(y) for y in y_values)
-        y_max = max(max(y) for y in y_values)
-        y_range = y_max - y_min
-        ax1.set_ylim(y_min - 0.1 * y_range, y_max + 0.1 * y_range)
+            # 添加终点注释部分的更新
+            self.add_endpoint_annotations(
+                ax1,
+                daily_data[['equal_cumulative_return']],
+                daily_data[['weighted_cumulative_return']],
+                'equal_cumulative_return',
+                portfolio_returns
+            )
 
-        # 添加终点注释部分的更新
-        self.add_endpoint_annotations(
-            ax1,
-            daily_data[['equal_cumulative_return']],
-            daily_data[['weighted_cumulative_return']],
-            'equal_cumulative_return',
-            portfolio_returns
-        )
+            # 绘制MACD（其余部分保持不变）
+            ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
+            ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
+            ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'],
+                    label='Histogram', color='gray', alpha=0.5)
+            ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
+            ax2.set_ylabel('MACD')
+            ax2.legend(loc='upper left')
+            ax2.grid(True)
 
-        # 绘制MACD（其余部分保持不变）
-        ax2.plot(data.index, data[f'{ticker}_MACD'], label='MACD', color='blue')
-        ax2.plot(data.index, data[f'{ticker}_MACD_SIGNAL'], label='Signal Line', color='red')
-        ax2.bar(data.index, data[f'{ticker}_MACD'] - data[f'{ticker}_MACD_SIGNAL'],
-                label='Histogram', color='gray', alpha=0.5)
-        ax2.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
-        ax2.set_ylabel('MACD')
-        ax2.legend(loc='upper left')
-        ax2.grid(True)
+            # 设置x轴属性
+            ax2.set_xlabel('日期')
+            years = mdates.YearLocator(2)
+            months = mdates.MonthLocator()
+            years_fmt = mdates.DateFormatter('%Y')
+            ax2.xaxis.set_major_locator(years)
+            ax2.xaxis.set_major_formatter(years_fmt)
+            ax2.xaxis.set_minor_locator(months)
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+            ax2.set_xlim(data.index[0], data.index[-1])
 
-        # 设置x轴属性
-        ax2.set_xlabel('日期')
-        years = mdates.YearLocator(2)
-        months = mdates.MonthLocator()
-        years_fmt = mdates.DateFormatter('%Y')
-        ax2.xaxis.set_major_locator(years)
-        ax2.xaxis.set_major_formatter(years_fmt)
-        ax2.xaxis.set_minor_locator(months)
-        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
-        ax2.set_xlim(data.index[0], data.index[-1])
+            # 更新统计信息
+            summary = self.create_summary_statistics(
+                ticker,
+                daily_data[['equal_investment']],
+                daily_data[['weighted_investment']],
+                daily_data[['equal_market_value']],
+                daily_data[['weighted_market_value']],
+                daily_data[['equal_cumulative_return']],
+                daily_data[['weighted_cumulative_return']],
+                start_date,
+                end_date,
+                portfolio_returns
+            )
 
-        # 更新统计信息
-        summary = self.create_summary_statistics(
-            ticker,
-            daily_data[['equal_investment']],
-            daily_data[['weighted_investment']],
-            daily_data[['equal_market_value']],
-            daily_data[['weighted_market_value']],
-            daily_data[['equal_cumulative_return']],
-            daily_data[['weighted_cumulative_return']],
-            start_date,
-            end_date,
-            portfolio_returns
-        )
+            ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-        ax1.text(0.05, 0.05, summary, transform=ax1.transAxes, verticalalignment='bottom',
-                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            plt.tight_layout()
+            return fig
 
-        plt.tight_layout()
-        return fig
+        except Exception as e:
+            error_message = f"分析过程中出现错误: {str(e)}"
+            print(error_message)
+            messagebox.showerror("分析错误", f"分析过程中出现错误: {str(e)}\n\n这可能是因为网络问题或Yahoo Finance服务暂时不可用。请稍后再试。")
+            return None
 
     
     def setup_chinese_font(self):
